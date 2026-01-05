@@ -1,0 +1,84 @@
+{
+  "layout": {
+    "orientation": "horizontal",
+    "mode": "fixed"
+  },
+  "display": {
+    "theme": "classic",
+    "updateInterval": 30000,
+    "scrollSpeed": 6
+  },
+  "deviations": {
+    "enabled": true,
+    "displayInterval": 20000
+  },
+  "departuresTable": {
+    "maxDepartures": 5
+  },
+  "tavlor": [
+    {
+      "station": {
+        "siteId": "1555",
+        "name": "Mårtensdal"
+      },
+      "displays": [
+        {
+          "lines": [
+            {
+              "lineFilter": "BUS-74",
+              "direction": "A"
+            },
+            {
+              "lineFilter": "BUS-96",
+              "direction": null
+            },
+            {
+              "lineFilter": "TRAM-30",
+              "direction": "B"
+            }
+          ],
+          "maxScrollingDepartures": 3,
+          "_collapsed": false,
+          "transportMode": null,
+          "lineDesignation": null
+        }
+      ],
+      "tableLineFilter": {
+        "BUS-74": "Hornsberg",
+        "BUS-96": "both",
+        "TRAM-30": "Solna station"
+      },
+      "_createdAt": 1767202559458
+    },
+    {
+      "station": {
+        "siteId": "1555",
+        "name": "Mårtensdal"
+      },
+      "displays": [
+        {
+          "maxScrollingDepartures": 3,
+          "_collapsed": false,
+          "transportMode": null,
+          "lineDesignation": null,
+          "lines": [
+            {
+              "lineFilter": "BUS-74",
+              "direction": "B"
+            },
+            {
+              "lineFilter": "TRAM-30",
+              "direction": "A"
+            }
+          ]
+        }
+      ],
+      "tableLineFilter": {
+        "BUS-74": "Sickla udde",
+        "BUS-96": "both",
+        "TRAM-30": "Sickla"
+      },
+      "_createdAt": 1767202559458
+    }
+  ]
+}

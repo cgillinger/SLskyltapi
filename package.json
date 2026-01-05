@@ -1,0 +1,30 @@
+{
+  "name": "sl-tavla-api-cache",
+  "version": "1.0.0",
+  "description": "API cache/proxy för SL avgångstavla - optimerar anrop mot SL Transport API",
+  "main": "api_cache.js",
+  "type": "module",
+  "scripts": {
+    "start": "node api_cache.js",
+    "dev": "nodemon api_cache.js",
+    "test": "node api_cache.js --test"
+  },
+  "keywords": [
+    "sl",
+    "transport",
+    "api",
+    "cache",
+    "stockholm"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

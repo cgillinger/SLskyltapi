@@ -1,0 +1,57 @@
+# ═══════════════════════════════════════════════════════════
+# DOCKERIGNORE - Exkludera filer från Docker image
+# ═══════════════════════════════════════════════════════════
+
+# Node modules (installeras i containern)
+node_modules/
+npm-debug.log
+
+# Git
+.git/
+.gitignore
+
+# Backup folder
+backup/
+
+# Development files
+*.md
+!README.md
+*.txt
+!projektstruktur.txt
+
+# Documentation
+DSM_Developer_Guide_7_enu.md
+Kunskapsbas*.docx
+projektcanvas*.md
+sl_designguides*.md
+uppdateringsplan*.md
+README_font.md
+
+# Large files
+sl.zip
+sl_stations.json
+
+# Python scripts
+*.py
+*.pyc
+__pycache__/
+
+# Images
+*.PNG
+*.png
+!PACKAGE_ICON*.PNG
+
+# SVG files (men tillåt SL_logo.svg)
+*.svg
+!SL_logo.svg
+
+# Zone identifier files (Windows WSL artifacts)
+*.Identifier
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

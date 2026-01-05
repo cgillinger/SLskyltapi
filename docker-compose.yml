@@ -1,0 +1,43 @@
+# ═══════════════════════════════════════════════════════════
+# DOCKER COMPOSE - SL Avgångstavla
+# Synology-kompatibel version (utan CPU limits)
+# ═══════════════════════════════════════════════════════════
+
+version: '3.8'
+
+services:
+  sl-tavla:
+    build: .
+    container_name: sl-tavla
+    
+    # Port mapping: host:container
+    ports:
+      - "8200:8200"
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Environment variables (kan anpassas)
+    environment:
+      - NODE_ENV=production
+      - TZ=Europe/Stockholm
+    
+    # Volym för att kunna editera config.json utan att bygga om
+    volumes:
+      - ./config.json:/app/config.json:ro
+    
+    # Nätverk
+    networks:
+      - sl-network
+    
+    # Healthcheck
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8200/api/status', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  sl-network:
+    driver: bridge

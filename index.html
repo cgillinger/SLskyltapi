@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SL Avgångstavla</title>
+    
+    <!-- Favicon - SL Logotyp -->
+    <link rel="icon" type="image/svg+xml" href="SL_logo.svg">
+    <link rel="icon" type="image/png" sizes="32x32" href="SL_logo.svg">
+    <link rel="icon" type="image/png" sizes="16x16" href="SL_logo.svg">
+    
+    <!-- iOS App Icon -->
+    <link rel="apple-touch-icon" href="PACKAGE_ICON.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="PACKAGE_ICON_256.PNG">
+    
+    <!-- Android/Chrome App Icon -->
+    <meta name="theme-color" content="#0089CA">
+    <meta name="mobile-web-app-capable" content="yes">
+    
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="settings/settings.css">
+</head>
+<body>
+    <!-- SL Header med logga och spårgrafik -->
+    <header class="sl-header">
+        <div class="sl-header-content">
+            <div class="sl-header-left">
+                <img src="SL_logo.svg" alt="SL" class="sl-logo">
+                <h1 class="sl-site-title">Avgångstavla</h1>
+            </div>
+            <div class="sl-station-name" id="header-station-name"></div>
+            
+            <!-- Natt-refresh knapp (syns endast 01:00-05:00) -->
+            <button id="manual-refresh-btn" class="btn-header btn-refresh" style="display: none;" title="Uppdatera avgångar manuellt">
+                <span class="refresh-icon">🔄</span>
+                <span class="refresh-text">Uppdatera</span>
+            </button>
+
+            <!-- Hamburger-meny -->
+            <button class="settings-hamburger" id="settings-hamburger" title="Öppna inställningar">
+                <span class="hamburger-line"></span>
+                <span class="hamburger-line"></span>
+                <span class="hamburger-line"></span>
+            </button>
+        </div>
+        <div class="sl-track-line"></div>
+    </header>
+
+    <div class="main-container">
+        <!-- Tavlor genereras dynamiskt här -->
+        <div id="tavlor-container"></div>
+    </div>
+
+    <!-- Timestamp för senaste uppdatering -->
+    <div id="update-timestamp" class="update-timestamp" style="display: none;">
+        Senast uppdaterad: <span id="timestamp-text">--:--</span>
+    </div>
+
+    <!-- Notifikation för uppdateringar -->
+    <div id="update-notification" class="update-notification">
+        <span class="notification-icon">✅</span>
+        <span class="notification-text">Avgångar uppdaterade!</span>
+    </div>
+
+
+    <!-- Settings Modal (v3.0 - Omdesignad) -->
+    <div class="settings-modal" id="settings-modal">
+        <div class="settings-overlay"></div>
+        <div class="settings-panel">
+            <div class="settings-header">
+                <h2>⚙️ Inställningar</h2>
+                <button class="settings-close" id="settings-close" title="Stäng">✖</button>
+            </div>
+            
+            <div class="settings-content">
+                <!-- TAVLOR (Huvudsektion) -->
+                <section class="settings-section primary-section">
+                    <h3>🚉 Mina Tavlor</h3>
+                    <p class="section-description">
+                        En <strong>tavla</strong> = en station med avgångstabell. 
+                        En <strong>skylt</strong> = en LED-display för specifik linje/riktning.
+                    </p>
+                    <div id="tavlor-list"></div>
+                    <button id="add-tavla-btn">+ Lägg till tavla</button>
+                </section>
+
+                <!-- AVANCERADE INSTÄLLNINGAR (Kollapsbar) -->
+                <details class="settings-accordion">
+                    <summary class="accordion-header">⚙️ Avancerade inställningar</summary>
+                    
+                    <!-- Layout & Utseende -->
+                    <section class="settings-section">
+                        <h3>📍 Layout & Utseende</h3>
+                        
+                        <div class="settings-field">
+                            <label for="setting-orientation">
+                                Orientering
+                                <span class="info-badge" data-tooltip="Horisontell = tavlor sida vid sida (stora skärmar). Vertikal = tavlor staplade (mobil/smal skärm).">i</span>
+                            </label>
+                            <select id="setting-orientation">
+                                <option value="horizontal">Horisontell</option>
+                                <option value="vertical">Vertikal</option>
+                            </select>
+                        </div>
+                        
+                        <div class="settings-field" id="mode-field">
+                            <label for="setting-mode">
+                                Läge
+                                <span class="info-badge" data-tooltip="Fixed = tavlor krymps för att få plats. Floating = scrollbar vid behov.">i</span>
+                            </label>
+                            <select id="setting-mode">
+                                <option value="fixed">Fixed (skalning)</option>
+                                <option value="floating">Floating (scrollbar)</option>
+                            </select>
+                        </div>
+                        
+                        <div class="settings-field">
+                            <label for="setting-theme">
+                                Tema
+                                <span class="info-badge" data-tooltip="Classic LED = traditionell SL-känsla. Sci-Fi = futuristiskt med glödeffekter.">i</span>
+                            </label>
+                            <select id="setting-theme">
+                                <option value="classic">Classic LED</option>
+                                <option value="sci-fi">Sci-Fi Futuristic</option>
+                                <option value="e-ink">E-Ink (grå)</option>
+                                <option value="retro-terminal">Retro Terminal (grön)</option>
+                                <option value="sl-modern">SL Modern (blå)</option>
+                                <option value="sl-modern-2">SL Modern 2 (vit)</option>
+                                <option value="art-deco-1920">Art Deco 1920</option>
+                            </select>
+                        </div>
+                        
+                        <div class="settings-field">
+                            <label for="setting-scroll-speed">
+                                Scroll-hastighet
+                                <span class="info-badge" data-tooltip="Tid för en hel scroll-runda. Lägre = snabbare. Standard: 8,8s.">i</span>
+                            </label>
+                            <input type="number" id="setting-scroll-speed" min="1" max="30" step="0.1" value="8.8">
+                            <span class="field-unit">sekunder</span>
+                        </div>
+                    </section>
+
+                    <!-- Uppdatering -->
+                    <section class="settings-section">
+                        <h3>⏱️ Uppdatering</h3>
+                        
+                        <div class="settings-field">
+                            <label for="setting-update-interval">
+                                Uppdateringsfrekvens
+                                <span class="info-badge" data-tooltip="Hur ofta avgångar hämtas från SL. 30s = bra balans.">i</span>
+                            </label>
+                            <input type="number" id="setting-update-interval" min="10" max="120" step="1" value="30">
+                            <span class="field-unit">sekunder</span>
+                            <div class="preset-buttons">
+                                <button type="button" class="preset-btn" data-value="10">⚡ 10s</button>
+                                <button type="button" class="preset-btn" data-value="30">🔄 30s</button>
+                                <button type="button" class="preset-btn" data-value="60">🌙 60s</button>
+                            </div>
+                        </div>
+                        
+                        <div class="settings-field">
+                            <label for="setting-max-departures">
+                                Avgångar i tabell
+                                <span class="info-badge" data-tooltip="Antal rader i avgångstabellen under skyltarna.">i</span>
+                            </label>
+                            <input type="number" id="setting-max-departures" min="1" max="20" value="10">
+                            <span class="field-unit">rader</span>
+                        </div>
+                    </section>
+
+                    <!-- Störningar -->
+                    <section class="settings-section">
+                        <h3>🚨 Störningar</h3>
+                        
+                        <div class="settings-field">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="setting-deviations-enabled" checked>
+                                <span>Visa störningsinformation</span>
+                                <span class="info-badge" data-tooltip="Visar SL:s störningsmeddelanden i scrollande text.">i</span>
+                            </label>
+                        </div>
+                        
+                        
+                        <div class="settings-field" id="deviation-duration-field">
+                            <label for="setting-deviation-duration">
+                                Visningstid
+                                <span class="info-badge" data-tooltip="Hur länge störningsmeddelandet visas varje gång (i sekunder).">i</span>
+                            </label>
+                            <input type="number" id="setting-deviation-duration" min="3" max="60" step="1" value="10">
+                            <span class="field-unit">sekunder</span>
+                        </div>
+                        
+                        <div class="settings-field" id="deviation-interval-field">
+                            <label for="setting-deviation-interval">
+                                Frekvens
+                                <span class="info-badge" data-tooltip="Hur lång tid mellan varje störningsvisning (i sekunder).">i</span>
+                            </label>
+                            <input type="number" id="setting-deviation-interval" min="10" max="120" step="5" value="30">
+                            <span class="field-unit">sekunder</span>
+                        </div>
+                    </section>
+
+                    <!-- Export/Import -->
+                    <section class="settings-section">
+                        <h3>💾 Säkerhetskopiering</h3>
+                        <p class="section-description">
+                            Exportera dina inställningar för att spara dem externt, eller importera en tidigare sparad konfiguration.
+                        </p>
+                        
+                        <div style="display: flex; gap: 10px; margin-top: 12px;">
+                            <button type="button" class="btn-small" id="export-config-btn">📤 Exportera</button>
+                            <button type="button" class="btn-small" id="import-config-btn">📥 Importera</button>
+                            <input type="file" id="import-file-input" accept=".json" style="display: none;">
+                        </div>
+                    </section>
+                </details>
+            </div>
+
+            <!-- Footer (endast Spara/Avbryt) -->
+            <div class="settings-footer">
+                <button class="btn-primary" id="save-settings-btn">💾 Spara & Stäng</button>
+                <button class="btn-secondary" id="cancel-settings-btn">❌ Avbryt</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Template för tavla -->
+    <template id="tavla-template">
+        <div class="tavla-container">
+            <div class="tavla-header" style="display: none;">
+                <h2 class="tavla-station-name"></h2>
+                <div class="tavla-track-line"></div>
+            </div>
+            <div class="tavla-displays"></div>
+            <div class="tavla-departures">
+                <div class="table-header">
+                    <div class="table-track-line"></div>
+                    <h2>Alla avgångar från <span class="tavla-departures-station"></span></h2>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Linje</th>
+                            <th>Trafikslag</th>
+                            <th>Destination</th>
+                            <th>Avgång</th>
+                        </tr>
+                    </thead>
+                    <tbody class="tavla-departures-tbody">
+                        <tr>
+                            <td colspan="4">Laddar avgångar...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </template>
+
+    <!-- Template för CSS-baserad display -->
+    <template id="display-template">
+        <div class="display-wrapper css-display">
+            <div class="main-departure">
+                <div class="departure-content">
+                    <span class="line-number">--</span>
+                    <span class="destination">Laddar...</span>
+                    <span class="time">--</span>
+                </div>
+            </div>
+            <div class="scrolling-departures">
+                <div class="scroll-content">
+                    Laddar avgångar...
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <script>
+        // Skapa tavlor dynamiskt baserat på config
+        async function createTavlor() {
+            // Försök ladda från localStorage först
+            let config;
+            const savedConfig = localStorage.getItem('sl_tavla_config');
+            
+            if (savedConfig) {
+                try {
+                    config = JSON.parse(savedConfig);
+                    console.log('âœ… Laddade config från localStorage');
+                } catch (e) {
+                    console.warn('Ã¢Å¡Â Ã¯Â¸Â Kunde inte läsa localStorage, laddar från config.json');
+                    const response = await fetch('config.json');
+                    config = await response.json();
+                }
+            } else {
+                const response = await fetch('config.json');
+                config = await response.json();
+                console.log('âœ… Laddade config från config.json (första gången)');
+            }
+            
+            // För nu: 1 tavla från config.station
+            // Framtida: config.tavlor med flera stationer
+            const tavlor = config.tavlor || [{
+                station: config.station,
+                displays: config.displays
+            }];
+            
+            const multiTavla = tavlor.length > 1;
+            
+            // Uppdatera page title
+            if (tavlor.length === 1) {
+                document.title = `${tavlor[0].station.name} - SL Avgångstavla`;
+            } else {
+                document.title = `SL Avgångstavla - ${tavlor.length} stationer`;
+            }
+            
+            // Hantera header stationsnamn
+            const headerStationName = document.getElementById('header-station-name');
+            if (multiTavla) {
+                headerStationName.style.display = 'none';
+            } else {
+                headerStationName.textContent = tavlor[0].station.name;
+                headerStationName.style.display = 'block';
+            }
+            
+            const tavlorContainer = document.getElementById('tavlor-container');
+            const tavlaTemplate = document.getElementById('tavla-template');
+            const displayTemplate = document.getElementById('display-template');
+            const pixelDisplayTemplate = document.getElementById('pixel-display-template');
+            const theme = config.display?.theme || 'classic';
+            
+            // Applicera layout-orientering
+            const orientation = config.layout?.orientation || 'vertical';
+            const mode = config.layout?.mode || 'fixed';
+            
+            tavlorContainer.classList.remove('layout-vertical', 'layout-horizontal-fixed', 'layout-horizontal-floating');
+            
+            if (orientation === 'horizontal') {
+                if (mode === 'floating') {
+                    tavlorContainer.classList.add('layout-horizontal-floating');
+                } else {
+                    tavlorContainer.classList.add('layout-horizontal-fixed');
+                }
+            } else {
+                tavlorContainer.classList.add('layout-vertical');
+            }
+            
+            tavlor.forEach((tavlaConfig, tavlaIndex) => {
+                // Skapa tavla från template
+                const tavlaClone = tavlaTemplate.content.cloneNode(true);
+                const tavlaContainer = tavlaClone.querySelector('.tavla-container');
+                tavlaContainer.id = `tavla-${tavlaIndex}`;
+                
+                // Visa tavla-header om multi-tavla
+                if (multiTavla) {
+                    const tavlaHeader = tavlaClone.querySelector('.tavla-header');
+                    tavlaHeader.style.display = 'block';
+                    tavlaHeader.querySelector('.tavla-station-name').textContent = tavlaConfig.station.name;
+                }
+                
+                // Sätt stationsnamn i avgångstabell
+                tavlaClone.querySelector('.tavla-departures-station').textContent = tavlaConfig.station.name;
+                
+                // Skapa displays för denna tavla
+                const displaysContainer = tavlaClone.querySelector('.tavla-displays');
+                const activeDisplays = tavlaConfig.displays.filter(d => !d._disabled);
+                
+                activeDisplays.forEach((displayConfig, displayIndex) => {
+                    const template = document.getElementById('display-template');
+                    const displayClone = template.content.cloneNode(true);
+                    const wrapper = displayClone.querySelector('.display-wrapper');
+                    wrapper.id = `tavla-${tavlaIndex}-display-${displayIndex}`;
+                    
+                    displaysContainer.appendChild(displayClone);
+                });
+                
+                tavlorContainer.appendChild(tavlaClone);
+            });
+            
+            // Spara tavlor globalt för app.js
+            window.tavlorConfig = tavlor;
+            window.configData = config;
+        }
+        
+        // Skapa tavlor innan andra scripts laddas
+        createTavlor();
+    </script>
+    
+    <!-- Ladda Golden Example Display Renderer -->
+    <script src="display-renderer.js" charset="utf-8"></script>
+    <!-- Ladda app -->
+    <script src="app.js" charset="utf-8"></script>
+    <!-- Ladda settings (filerna ligger i settings/) -->
+    <script src="settings/station-search.js" charset="utf-8"></script>
+    <script src="settings/settings.js" charset="utf-8"></script>
+</body>
+</html>
