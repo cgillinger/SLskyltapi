@@ -2,6 +2,8 @@
 
 **Realtidsdisplay för Stockholms Lokaltrafik** med autentisk LED-känsla och moderna webbteknologier.
 
+> Det här är ett personligt hobbyprojekt som jag byggt för eget bruk och lagt upp ifall det är till nytta för någon annan. Jag jobbar på det på fritiden, så issues och PR:ar är välkomna men svar kan dröja. Använd på egen risk.
+
 ![Version](https://img.shields.io/badge/version-2.2.0-blue)
 ![JavaScript](https://img.shields.io/badge/javascript-ES6+-yellow)
 ![API](https://img.shields.io/badge/API-SL%20Transport-orange)
