@@ -88,12 +88,14 @@ function updateLinesCache(siteId, departures) {
         cache[siteId] = { lines: {}, lastUpdated: now };
     }
     
-    // Extrahera linjer från avgångar
+    // Extrahera linjer från avgångar (och samla destinationer per linje
+    // till destinationsminnet — ger riktningsnamn i inställnings-UI:t)
+    const destsByLine = {};
     departures.forEach(dep => {
         const mode = dep.line?.transport_mode;
         const designation = dep.line?.designation;
         const lineName = dep.line?.name || dep.direction || dep.destination;
-        
+
         if (designation && mode) {
             const key = `${mode}-${designation}`;
             cache[siteId].lines[key] = {
@@ -102,8 +104,15 @@ function updateLinesCache(siteId, departures) {
                 transport_mode: mode,
                 lastSeen: now
             };
+            const destination = dep.destination || dep.direction;
+            if (destination) {
+                (destsByLine[key] = destsByLine[key] || new Set()).add(destination);
+            }
         }
     });
+    rememberDestinationsMap(siteId, Object.fromEntries(
+        Object.entries(destsByLine).map(([k, s]) => [k, [...s]])
+    ));
     
     // Rensa gamla linjer som inte setts på 7 dagar
     const linesToRemove = [];
@@ -161,20 +170,30 @@ window.updateLinesCache = updateLinesCache;  // FAS 2: Exponera för settings.js
 const DEST_CACHE_KEY = 'sl_destinations_cache';
 const DEST_CACHE_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
-function rememberDestinations(siteId, filterKey, destinations) {
-    if (!siteId || !destinations || destinations.length === 0) return;
+function rememberDestinationsMap(siteId, destsByFilterKey) {
+    if (!siteId) return;
+    const keys = Object.keys(destsByFilterKey || {});
+    if (keys.length === 0) return;
     try {
         const cache = JSON.parse(localStorage.getItem(DEST_CACHE_KEY) || '{}');
-        const key = `${siteId}|${filterKey}`;
-        const entry = cache[key] || {};
         const now = Date.now();
-        destinations.forEach(d => { entry[d] = now; });
-        Object.keys(entry).forEach(d => {
-            if (now - entry[d] > DEST_CACHE_EXPIRY_MS) delete entry[d];
+        keys.forEach(filterKey => {
+            const dests = destsByFilterKey[filterKey];
+            if (!dests || dests.length === 0) return;
+            const key = `${siteId}|${filterKey}`;
+            const entry = cache[key] || {};
+            dests.forEach(d => { entry[d] = now; });
+            Object.keys(entry).forEach(d => {
+                if (now - entry[d] > DEST_CACHE_EXPIRY_MS) delete entry[d];
+            });
+            cache[key] = entry;
         });
-        cache[key] = entry;
         localStorage.setItem(DEST_CACHE_KEY, JSON.stringify(cache));
     } catch (e) { /* localStorage otillgänglig — minnet är bara en förbättring */ }
+}
+
+function rememberDestinations(siteId, filterKey, destinations) {
+    rememberDestinationsMap(siteId, { [filterKey]: destinations });
 }
 
 function getKnownDestinations(siteId, filterKey) {
@@ -185,6 +204,33 @@ function getKnownDestinations(siteId, filterKey) {
         return [];
     }
 }
+
+/**
+ * Kända destinationer för ett linjefilter vid en station, från minnet.
+ * "MODE-*" aggregerar alla linjer av det trafikslaget. Används av
+ * inställnings-UI:t för att visa riktiga riktningsnamn istället för A/B.
+ */
+function getKnownDestinationsFor(siteId, lineFilter) {
+    if (!siteId || !lineFilter) return [];
+    try {
+        const cache = JSON.parse(localStorage.getItem(DEST_CACHE_KEY) || '{}');
+        const result = new Set();
+        if (lineFilter.endsWith('-*')) {
+            const prefix = `${siteId}|${lineFilter.slice(0, -1)}`; // "123|TRAM-"
+            Object.keys(cache).forEach(key => {
+                if (key.startsWith(prefix)) {
+                    Object.keys(cache[key]).forEach(d => result.add(d));
+                }
+            });
+        } else {
+            Object.keys(cache[`${siteId}|${lineFilter}`] || {}).forEach(d => result.add(d));
+        }
+        return [...result];
+    } catch (e) {
+        return [];
+    }
+}
+window.getKnownDestinationsFor = getKnownDestinationsFor;
 
 /**
  * Väljer avgångar för riktning A/B ur destinationMap.

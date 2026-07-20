@@ -944,7 +944,7 @@ SettingsManager.prototype.createLineElement = function(line, lineIndex, tavla, d
     
     // Bygg dropdown-options
     const lineOptions = this.buildLineDropdownOptions(tavla._availableLines || []);
-    const directionOptions = this.buildDirectionOptions(line.lineFilter, tavla._destinations || {});
+    const directionOptions = this.buildDirectionOptions(line.lineFilter, tavla);
     
     div.innerHTML = `
         <div class="line-row-header">
@@ -989,7 +989,7 @@ SettingsManager.prototype.createLineElement = function(line, lineIndex, tavla, d
         line.lineFilter = e.target.value || null;
         
         // Uppdatera riktning-dropdown
-        dirSelect.innerHTML = this.buildDirectionOptions(line.lineFilter, tavla._destinations || {});
+        dirSelect.innerHTML = this.buildDirectionOptions(line.lineFilter, tavla);
         dirSelect.value = '';
         line.direction = null;
         
@@ -1080,39 +1080,57 @@ SettingsManager.prototype.buildLineDropdownOptions = function(lines) {
     return html;
 };
 
-SettingsManager.prototype.buildDirectionOptions = function(lineFilter, destinations) {
+/**
+ * Kända destinationer för ett linjefilter: live-data (senaste hämtningen)
+ * kompletterad med destinationsminnet (ackumulerat över 7 dagar, så båda
+ * riktningarna är kända även när bara en trafikeras just nu).
+ * "MODE-*" aggregerar alla linjer av trafikslaget. Sorterad alfabetiskt —
+ * samma ordning som appens A/B-val vid körning.
+ */
+SettingsManager.prototype.getDestinationsForFilter = function(lineFilter, tavla) {
+    const set = new Set();
+    const live = tavla._destinations || {};
+
+    if (lineFilter && lineFilter.endsWith('-*')) {
+        const prefix = lineFilter.slice(0, -1); // "TRAM-"
+        Object.entries(live).forEach(([key, dests]) => {
+            if (key.startsWith(prefix)) dests.forEach(d => set.add(d));
+        });
+    } else if (lineFilter && live[lineFilter]) {
+        live[lineFilter].forEach(d => set.add(d));
+    }
+
+    const siteId = tavla.station && tavla.station.siteId;
+    if (siteId && typeof window.getKnownDestinationsFor === 'function') {
+        window.getKnownDestinationsFor(siteId, lineFilter).forEach(d => set.add(d));
+    }
+
+    return [...set].sort();
+};
+
+SettingsManager.prototype.buildDirectionOptions = function(lineFilter, tavla) {
     let html = '<option value="">Båda riktningar</option>';
-    
-    if (!lineFilter || lineFilter.endsWith('-*')) {
-        // Kan inte visa specifika destinationer för "alla" eller "alla av trafikslag"
-        html += '<option value="A">A (första alfabetiskt)</option>';
-        html += '<option value="B">B (andra alfabetiskt)</option>';
-        return html;
-    }
-    
-    // Hämta destinationer för specifik linje
-    const lineDestinations = destinations[lineFilter];
-    
-    if (lineDestinations && lineDestinations.length > 0) {
-        // Sortera alfabetiskt (A = första, B = andra)
-        const sorted = [...lineDestinations].sort();
-        
-        if (sorted.length >= 1) {
-            html += `<option value="A">→ ${sorted[0]}</option>`;
+    const esc = window.escapeHtml || (s => String(s ?? ''));
+
+    // Utan linjefilter tillämpas ingen riktning vid körning — bara A/B generiskt
+    const dests = lineFilter ? this.getDestinationsForFilter(lineFilter, tavla) : [];
+
+    if (dests.length >= 2) {
+        html += `<option value="A">→ ${esc(dests[0])}</option>`;
+        html += `<option value="B">→ ${esc(dests[1])}</option>`;
+        // Fler än 2 destinationer (kortlinjer etc) — välj som exakt destination
+        for (let i = 2; i < dests.length; i++) {
+            html += `<option value="${esc(dests[i])}">→ ${esc(dests[i])} (exakt)</option>`;
         }
-        if (sorted.length >= 2) {
-            html += `<option value="B">→ ${sorted[1]}</option>`;
-        }
-        // Om fler än 2 destinationer (ovanligt), visa dem också
-        for (let i = 2; i < sorted.length; i++) {
-            html += `<option value="${sorted[i]}">→ ${sorted[i]}</option>`;
-        }
+    } else if (dests.length === 1) {
+        html += `<option value="A">→ ${esc(dests[0])}</option>`;
+        html += '<option value="B">Motsatt riktning (namn okänt ännu)</option>';
     } else {
-        // Fallback om inga destinationer hittades
+        // Inget känt ännu (ny station/linje) — generisk fallback
         html += '<option value="A">A (första alfabetiskt)</option>';
         html += '<option value="B">B (andra alfabetiskt)</option>';
     }
-    
+
     return html;
 };
 
@@ -1140,18 +1158,16 @@ SettingsManager.prototype.generateSkyltName = function(display, tavla) {
                 return `→ ${direction}`;
             }
             
-            // A/B-riktning - hämta faktisk destination
-            if (lineFilter && tavla._destinations) {
-                const destKey = lineFilter.endsWith('-*') ? null : lineFilter;
-                
-                if (destKey && tavla._destinations[destKey]) {
-                    const dests = [...tavla._destinations[destKey]].sort();
-                    const dest = direction === 'A' ? dests[0] : dests[1];
-                    if (dest) {
-                        const [mode, designation] = lineFilter.split('-');
-                        const info = TRANSPORT_MODE_NAMES[mode] || { icon: '🚉' };
-                        return `${info.icon} ${designation} → ${dest}`;
-                    }
+            // A/B-riktning - hämta faktisk destination (live + destinationsminne,
+            // fungerar även för "MODE-*"-filter)
+            if (lineFilter) {
+                const dests = this.getDestinationsForFilter(lineFilter, tavla);
+                const dest = direction === 'A' ? dests[0] : dests[1];
+                if (dest) {
+                    const [mode, designation] = lineFilter.split('-');
+                    const info = TRANSPORT_MODE_NAMES[mode] || { icon: '🚉' };
+                    const label = lineFilter.endsWith('-*') ? (info.name || mode) : designation;
+                    return `${info.icon} ${label} → ${dest}`;
                 }
             }
             
