@@ -158,35 +158,35 @@ class PollingManager {
      * Bestämmer polling-intervall baserat på nästa avgång och tid på dygnet
      */
     getPollingInterval(data) {
-        // Natt-logik (01:00-05:00)
+        const nextDeparture = (data?.departures && data.departures.length > 0)
+            ? this.getNextDeparture(data.departures)
+            : null;
+        const minutesUntil = nextDeparture?.minutesUntil;
+
+        // Nära förestående avgång trumfar ALLT (även natt-läget):
+        // när någon faktiskt står och väntar ska tiderna vara färska.
+        // Fair use-mässigt ofarligt — 30s-takten gäller nattetid bara de
+        // minuter en avgång är nära (t.ex. nattbuss), inte hela natten.
+        if (nextDeparture && minutesUntil <= 10) {
+            console.log(`⚡ Nästa avgång om ${minutesUntil} min → ${CONFIG.polling.immediate/1000}s intervall`);
+            return CONFIG.polling.immediate;
+        }
+
+        // Natt-logik (01:00-05:00): polla glest när inget är på gång
         const hour = new Date().getHours();
         if (hour >= CONFIG.nightHours.start && hour < CONFIG.nightHours.end) {
             console.log(`🌙 Natt-läge (${hour}:00) → ${CONFIG.polling.night/1000}s intervall`);
             return CONFIG.polling.night;
         }
-        
-        // Om inga avgångar
-        if (!data?.departures || data.departures.length === 0) {
+
+        // Inga (framtida) avgångar
+        if (!nextDeparture) {
             console.log(`⏸️  Inga avgångar → ${CONFIG.polling.idle/1000}s intervall`);
             return CONFIG.polling.idle;
         }
-        
-        // Hitta nästa avgång
-        const nextDeparture = this.getNextDeparture(data.departures);
-        
-        if (!nextDeparture) {
-            return CONFIG.polling.idle;
-        }
-        
-        const minutesUntil = nextDeparture.minutesUntil;
-        
-        if (minutesUntil <= 10) {
-            console.log(`⚡ Nästa avgång om ${minutesUntil} min → ${CONFIG.polling.immediate/1000}s intervall`);
-            return CONFIG.polling.immediate;
-        } else {
-            console.log(`⏱️  Nästa avgång om ${minutesUntil} min → ${CONFIG.polling.normal/1000}s intervall`);
-            return CONFIG.polling.normal;
-        }
+
+        console.log(`⏱️  Nästa avgång om ${minutesUntil} min → ${CONFIG.polling.normal/1000}s intervall`);
+        return CONFIG.polling.normal;
     }
     
     /**
