@@ -291,10 +291,34 @@ class PollingManager {
         try {
             // Hämta från SL
             const data = await this.fetchFromSL(siteId);
-            
+
+            // SL returnerar ibland tomma svar (HTTP 200, 0 avgångar) trots
+            // pågående trafik — observerat flera gånger för site 1555.
+            // Har cachen framtida avgångar behåller vi den och gör en snabb
+            // retry; tomt accepteras först efter 2 tomma svar i rad (äkta
+            // trafikuppehåll slår igenom, glitchar gör det inte).
+            const isEmpty = !data?.departures || data.departures.length === 0;
+            if (isEmpty) {
+                const prev = this.cache.get(siteId, { allowStale: true });
+                const prevHasFuture = prev?.data?.departures?.some(d => {
+                    const t = new Date(d.expected || d.scheduled).getTime();
+                    return Number.isFinite(t) && t > Date.now();
+                });
+                poller.emptyCount = (poller.emptyCount || 0) + 1;
+                if (prevHasFuture && poller.emptyCount <= 2) {
+                    console.warn(`⚠️ Tomt SL-svar för siteId=${siteId} trots framtida avgångar i cache (${poller.emptyCount}/2) — behåller gammal data, retry om ${CONFIG.polling.immediate/1000}s`);
+                    poller.timeout = setTimeout(() => {
+                        this.pollOnce(siteId);
+                    }, CONFIG.polling.immediate);
+                    return;
+                }
+            } else {
+                poller.emptyCount = 0;
+            }
+
             // Uppdatera cache
             this.cache.set(siteId, data);
-            
+
             // Beräkna nästa intervall
             const interval = this.getPollingInterval(data);
             
