@@ -317,8 +317,18 @@ class SettingsManager {
     async loadCurrentConfig() {
         const saved = localStorage.getItem('sl_tavla_config');
         
+        let parsedSaved = null;
         if (saved) {
-            this.currentConfig = JSON.parse(saved);
+            try {
+                parsedSaved = JSON.parse(saved);
+            } catch (e) {
+                console.warn('⚠️ Trasig sparad config — faller tillbaka på config.json');
+                localStorage.removeItem('sl_tavla_config');
+            }
+        }
+
+        if (parsedSaved) {
+            this.currentConfig = parsedSaved;
             console.log('✅ Config från localStorage');
         } else {
             try {
@@ -339,6 +349,11 @@ class SettingsManager {
             }
         }
         
+        // Skydda mot configs från gamla schemat utan tavlor-array
+        if (!Array.isArray(this.currentConfig.tavlor)) {
+            this.currentConfig.tavlor = [];
+        }
+
         // Initiera _availableLines och _destinations för alla tavlor
         // OCH rekonstruera lineFilter från transportMode/lineDesignation
         this.currentConfig.tavlor.forEach(tavla => {
@@ -685,7 +700,7 @@ SettingsManager.prototype.createTavlaElement = function(tavla, index) {
         <div class="tavla-header" data-action="toggle">
             <div class="tavla-title">
                 <span class="collapse-icon">${isExpanded ? '▼' : '▶'}</span>
-                <span class="tavla-name">Tavla ${index + 1}: ${stationName}</span>
+                <span class="tavla-name">Tavla ${index + 1}: ${window.escapeHtml(stationName)}</span>
                 <span class="tavla-badge">${displayCount} skylt${displayCount !== 1 ? 'ar' : ''}</span>
             </div>
             <button class="btn-icon btn-delete-tavla" title="Ta bort tavla" ${this.currentConfig.tavlor.length === 1 ? 'disabled' : ''}>🗑️</button>
@@ -699,8 +714,8 @@ SettingsManager.prototype.createTavlaElement = function(tavla, index) {
                     <span class="info-badge" data-tooltip="Välj vilken station denna tavla visar avgångar från">i</span>
                 </label>
                 <div class="station-search-wrapper">
-                    <input type="text" class="station-search-input" placeholder="Sök station..." value="${tavla.station.name || ''}">
-                    <input type="hidden" class="station-id-input" value="${tavla.station.siteId || ''}">
+                    <input type="text" class="station-search-input" placeholder="Sök station..." value="${window.escapeHtml(tavla.station.name || '')}">
+                    <input type="hidden" class="station-id-input" value="${window.escapeHtml(tavla.station.siteId || '')}">
                 </div>
                 ${cacheInfoHtml}
             </div>
@@ -848,7 +863,7 @@ SettingsManager.prototype.createDisplayElement = function(display, tavla, tavlaI
             <div class="skylt-title">
                 <span class="collapse-icon">${isExpanded ? '▼' : '▶'}</span>
                 <span class="skylt-label">📺 Skylt ${displayIndex + 1}:</span>
-                <span class="skylt-name">${skyltName}</span>
+                <span class="skylt-name">${window.escapeHtml(skyltName)}</span>
             </div>
             <button class="btn-icon btn-delete-skylt" title="Ta bort skylt">🗑️</button>
         </div>
@@ -1413,13 +1428,18 @@ SettingsManager.prototype.collectFormData = function() {
 
 SettingsManager.prototype.validate = function() {
     const errors = [];
-    
+
+    if (!Array.isArray(this.currentConfig.tavlor) || this.currentConfig.tavlor.length === 0) {
+        errors.push('Minst en tavla måste finnas');
+        return errors;
+    }
+
     this.currentConfig.tavlor.forEach((tavla, i) => {
         if (!tavla.station.siteId || !tavla.station.name) {
             errors.push(`Tavla ${i + 1}: Station måste väljas`);
         }
     });
-    
+
     return errors;
 };
 
@@ -1432,16 +1452,24 @@ SettingsManager.prototype.cleanConfigForSave = function(config) {
         delete tavla._destinations;
         delete tavla._collapsed;
         
-        // Konvertera nya lineFilter till gammalt format för bakåtkompatibilitet
+        // Skriv gamla nycklar (transportMode/lineDesignation/direction) från
+        // det användaren FAKTISKT valt — dvs. lines[0]. Tidigare lästes ett
+        // inaktuellt top-level lineFilter, vilket gav stale/null-värden för
+        // externa läsare av configen (t.ex. hallskärmen via exportflödet).
         tavla.displays.forEach(display => {
-            if (display.lineFilter) {
-                if (display.lineFilter.endsWith('-*')) {
+            delete display._collapsed;
+
+            const primary = (Array.isArray(display.lines) && display.lines[0]) || null;
+            const lineFilter = primary ? primary.lineFilter : (display.lineFilter || null);
+
+            if (lineFilter) {
+                if (lineFilter.endsWith('-*')) {
                     // "MODE-*" -> transportMode utan lineDesignation
-                    display.transportMode = display.lineFilter.replace('-*', '');
+                    display.transportMode = lineFilter.replace('-*', '');
                     display.lineDesignation = null;
                 } else {
                     // "MODE-LINE" -> båda
-                    const [mode, line] = display.lineFilter.split('-');
+                    const [mode, line] = lineFilter.split('-');
                     display.transportMode = mode;
                     display.lineDesignation = line;
                 }
@@ -1449,6 +1477,7 @@ SettingsManager.prototype.cleanConfigForSave = function(config) {
                 display.transportMode = null;
                 display.lineDesignation = null;
             }
+            display.direction = primary ? (primary.direction ?? null) : (display.direction ?? null);
             delete display.lineFilter;
         });
     });
@@ -1456,22 +1485,36 @@ SettingsManager.prototype.cleanConfigForSave = function(config) {
     return clean;
 };
 
-SettingsManager.prototype.save = function() {
+SettingsManager.prototype.save = async function() {
     this.collectFormData();
-    
+
     const errors = this.validate();
     if (errors.length > 0) {
         alert('⚠️ Fel i inställningar:\n\n' + errors.join('\n'));
         return;
     }
-    
+
     // Rensa och spara
     const cleanConfig = this.cleanConfigForSave(this.currentConfig);
-    localStorage.setItem('sl_tavla_config', JSON.stringify(cleanConfig));
-    
+    try {
+        localStorage.setItem('sl_tavla_config', JSON.stringify(cleanConfig));
+
+        // Spara snapshot av serverns config.json — den lokala configen gäller
+        // bara tills config.json ändras på servern (se index.html)
+        try {
+            const response = await fetch('config.json');
+            if (response.ok) {
+                localStorage.setItem('sl_tavla_config_base', await response.text());
+            }
+        } catch (e) { /* offline — basen uppdateras vid nästa spara */ }
+    } catch (e) {
+        alert('❌ Kunde inte spara inställningarna (lagringsfel): ' + e.message);
+        return;
+    }
+
     console.log('✅ Config sparad');
     this.close();
-    
+
     alert('✅ Inställningar sparade! Sidan laddas om...');
     location.reload();
 };
@@ -1501,8 +1544,8 @@ SettingsManager.prototype.import = function(e) {
         try {
             const config = JSON.parse(event.target.result);
             
-            if (!config.tavlor || !config.display || !config.layout) {
-                throw new Error('Ogiltig config-struktur');
+            if (!Array.isArray(config.tavlor) || config.tavlor.length === 0 || !config.display || !config.layout) {
+                throw new Error('Ogiltig config-struktur (tavlor måste vara en icke-tom lista)');
             }
             
             this.currentConfig = config;

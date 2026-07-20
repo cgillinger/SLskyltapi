@@ -7,7 +7,7 @@
 import express from 'express';
 import { setTimeout as sleep } from 'timers/promises';
 import { createHash } from 'crypto';
-import { readFileSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 
 // ═══════════════════════════════════════════════════════════
 // APP-VERSION
@@ -16,8 +16,8 @@ import { readFileSync } from 'fs';
 // ändras (dvs. efter varje deploy/omstart med ny kod eller config).
 // ═══════════════════════════════════════════════════════════
 
-const APP_VERSION = (() => {
-    const files = ['index.html', 'app.js', 'display-renderer.js', 'styles.css', 'config.json'];
+const APP_VERSION_BASE = (() => {
+    const files = ['index.html', 'app.js', 'display-renderer.js', 'styles.css'];
     const hash = createHash('md5');
     for (const file of files) {
         try {
@@ -28,6 +28,16 @@ const APP_VERSION = (() => {
     }
     return hash.digest('hex').slice(0, 12);
 })();
+
+// config.json volymmonteras och kan ändras utan omstart — dess mtime vägs in
+// per anrop så att klienter laddar om även vid rena config-ändringar på hosten
+function getAppVersion() {
+    try {
+        return `${APP_VERSION_BASE}-${Math.round(statSync('config.json').mtimeMs)}`;
+    } catch {
+        return APP_VERSION_BASE;
+    }
+}
 
 // ═══════════════════════════════════════════════════════════
 // KONFIGURATION
@@ -78,12 +88,15 @@ class CacheManager {
     }
     
     setError(siteId, error) {
+        // Behåll senast lyckade data (och dess timestamp) — ett övergående
+        // SL-fel ska inte kasta fullt användbar stale-data
+        const prev = this.cache.get(siteId);
         this.cache.set(siteId, {
-            data: null,
-            timestamp: Date.now(),
+            data: prev?.data ?? null,
+            timestamp: prev?.data ? prev.timestamp : Date.now(),
             error: error.message
         });
-        
+
         console.error(`❌ Cache error för siteId=${siteId}: ${error.message}`);
     }
     
@@ -183,26 +196,28 @@ class PollingManager {
         if (!departures || departures.length === 0) {
             return null;
         }
-        
+
+        // Arrayen är inte garanterat tidssorterad (SL grupperar per linje) —
+        // hitta den faktiskt tidigaste framtida avgången
         const now = new Date();
-        
+        let next = null;
+
         for (const dep of departures) {
             if (!dep.expected) continue;
-            
+
             const depTime = new Date(dep.expected);
-            const diffMs = depTime - now;
-            const diffMin = Math.round(diffMs / 60000);
-            
-            if (diffMin >= 0) {
-                return {
+            const diffMin = Math.round((depTime - now) / 60000);
+
+            if (diffMin >= 0 && (!next || diffMin < next.minutesUntil)) {
+                next = {
                     expected: dep.expected,
                     minutesUntil: diffMin,
                     destination: dep.destination || dep.direction
                 };
             }
         }
-        
-        return null;
+
+        return next;
     }
     
     /**
@@ -260,12 +275,19 @@ class PollingManager {
      */
     async pollOnce(siteId) {
         const poller = this.pollers.get(siteId);
-        
+
         if (!poller || !poller.active) {
             console.log(`⏹️  Polling stoppad för siteId=${siteId}`);
             return;
         }
-        
+
+        // Guard mot parallella kedjor: om en hämtning redan pågår (schemalagd
+        // eller via refreshNow) får den kedjan schemalägga nästa cykel
+        if (poller.fetching) {
+            return;
+        }
+        poller.fetching = true;
+
         try {
             // Hämta från SL
             const data = await this.fetchFromSL(siteId);
@@ -292,6 +314,8 @@ class PollingManager {
             poller.timeout = setTimeout(() => {
                 this.pollOnce(siteId);
             }, retryInterval);
+        } finally {
+            poller.fetching = false;
         }
     }
     
@@ -302,21 +326,20 @@ class PollingManager {
     refreshNow(siteId) {
         const poller = this.pollers.get(siteId);
 
-        if (!poller || !poller.active || poller.refreshing) {
+        // fetching-guarden ser till att vi aldrig startar en parallell kedja
+        // bredvid en redan pågående hämtning
+        if (!poller || !poller.active || poller.fetching) {
             return;
         }
 
         console.log(`⚡ Omedelbar refresh för siteId=${siteId} (stale cache serverad)`);
-        poller.refreshing = true;
 
         if (poller.timeout) {
             clearTimeout(poller.timeout);
             poller.timeout = null;
         }
 
-        this.pollOnce(siteId).finally(() => {
-            poller.refreshing = false;
-        });
+        this.pollOnce(siteId);
     }
 
     /**
@@ -381,6 +404,22 @@ app.use((req, res, next) => {
 // Servera statiska filer (HTML, CSS, JS, etc)
 // VIKTIGT: Denna måste komma FÖRE API-routes
 
+// Allowlist: servera ENDAST klientens filer — inte serverkod, node_modules,
+// .git, arbetsdokument eller annat som råkar ligga i katalogen
+const STATIC_ALLOWLIST = new Set([
+    '/', '/index.html',
+    '/app.js', '/display-renderer.js', '/styles.css', '/config.json',
+    '/SL_logo.svg', '/PACKAGE_ICON.png', '/PACKAGE_ICON.PNG', '/PACKAGE_ICON_256.PNG',
+    '/settings/settings.js', '/settings/settings.css', '/settings/station-search.js'
+]);
+
+app.use((req, res, next) => {
+    if (req.path.startsWith('/api/') || STATIC_ALLOWLIST.has(req.path)) {
+        return next();
+    }
+    res.status(404).json({ error: 'Not found' });
+});
+
 app.use(express.static('.', {
     setHeaders: (res, path) => {
         // no-cache = browsern får cacha men MÅSTE revalidera (ETag → 304).
@@ -400,13 +439,25 @@ app.use(express.static('.', {
  * GET /api/departures/:siteId
  * Returnerar cached avgångar, startar polling om ej aktiv
  */
+const MAX_POLLERS = 30;
+
 app.get('/api/departures/:siteId', async (req, res) => {
     const { siteId } = req.params;
-    
+
+    // Validera: SL:s siteId är numeriska. Stoppar godtyckliga strängar från
+    // att skapa eviga pollers och nå SL:s API okontrollerat.
+    if (!/^\d{1,7}$/.test(siteId)) {
+        return res.status(400).json({ error: 'Ogiltigt siteId (måste vara numeriskt)' });
+    }
+
     console.log(`📡 Request: /api/departures/${siteId}`);
-    
+
     // Kontrollera om polling är aktiv
     if (!pollingManager.pollers.has(siteId) || !pollingManager.pollers.get(siteId).active) {
+        if (pollingManager.pollers.size >= MAX_POLLERS) {
+            console.warn(`🚫 Poller-tak (${MAX_POLLERS}) nått — vägrar starta polling för siteId=${siteId}`);
+            return res.status(503).json({ error: 'För många aktiva stationer', message: `Max ${MAX_POLLERS} stationer kan pollas samtidigt` });
+        }
         console.log(`🔄 Startar ny polling för siteId=${siteId}`);
         pollingManager.startPolling(siteId);
         
@@ -415,8 +466,8 @@ app.get('/api/departures/:siteId', async (req, res) => {
         while (attempts < 10) {
             await sleep(500);
             const cached = cache.get(siteId);
-            if (cached?.data) {
-                break;
+            if (cached?.data || cached?.error) {
+                break; // data ELLER känt fel — ingen anledning att vänta vidare
             }
             attempts++;
         }
@@ -441,21 +492,24 @@ app.get('/api/departures/:siteId', async (req, res) => {
         });
     }
     
-    if (cached.error) {
+    // Fel utan användbar data → 500. Har vi data (även äldre) serveras den,
+    // med felet som metadata.
+    if (cached.error && !cached.data) {
         return res.status(500).json({
             error: cached.error,
             timestamp: cached.timestamp
         });
     }
-    
+
     // Returnera data med metadata
     res.json({
         ...cached.data,
-        _version: APP_VERSION,
+        _version: getAppVersion(),
         _cache: {
             timestamp: cached.timestamp,
             age: Math.round((Date.now() - cached.timestamp) / 1000),
-            stale: !!cached.stale
+            stale: !!cached.stale,
+            upstreamError: cached.error || null
         }
     });
 });
@@ -466,7 +520,7 @@ app.get('/api/departures/:siteId', async (req, res) => {
  */
 app.get('/api/status', (req, res) => {
     res.json({
-        version: APP_VERSION,
+        version: getAppVersion(),
         config: {
             port: CONFIG.port,
             cacheTTL: CONFIG.cacheTTL / 1000,
@@ -503,7 +557,7 @@ app.get('/', (req, res) => {
 // SERVER START
 // ═══════════════════════════════════════════════════════════
 
-app.listen(CONFIG.port, () => {
+const server = app.listen(CONFIG.port, () => {
     console.log('');
     console.log('═══════════════════════════════════════════════════════════');
     console.log('🚀 SL API CACHE/PROXY SERVER');
@@ -511,7 +565,7 @@ app.listen(CONFIG.port, () => {
     console.log(`📡 Port: ${CONFIG.port}`);
     console.log(`💾 Cache TTL: ${CONFIG.cacheTTL / 1000}s`);
     console.log(`🔭 Forecast-fönster: ${CONFIG.forecastMinutes} min`);
-    console.log(`🏷️  App-version: ${APP_VERSION}`);
+    console.log(`🏷️  App-version: ${getAppVersion()}`);
     console.log(`⏱️  Polling intervaller:`);
     console.log(`   - Nästa avgång ≤ 10 min: ${CONFIG.polling.immediate / 1000}s`);
     console.log(`   - Nästa avgång > 10 min: ${CONFIG.polling.normal / 1000}s`);
@@ -528,13 +582,13 @@ app.listen(CONFIG.port, () => {
     console.log('');
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('🛑 SIGTERM mottagen, stänger ner...');
-    process.exit(0);
-});
+// Graceful shutdown: sluta ta emot nya anslutningar, låt pågående svar bli
+// klara (max 5 s), avsluta sedan
+function shutdown(signal) {
+    console.log(`🛑 ${signal} mottagen, stänger ner...`);
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5000).unref();
+}
 
-process.on('SIGINT', () => {
-    console.log('🛑 SIGINT mottagen, stänger ner...');
-    process.exit(0);
-});
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

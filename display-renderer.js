@@ -5,6 +5,17 @@
 // FIX: Använder getBoundingClientRect() för korrekt mätning
 // ═══════════════════════════════════════════════════════════
 
+// HTML-escaping för data från API:t (destinationer, linjenummer, störningar)
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+window.escapeHtml = escapeHtml;
+
 class DisplayRenderer {
     constructor(containerId) {
         this.containerId = containerId;
@@ -176,9 +187,9 @@ class DisplayRenderer {
         
         container.innerHTML = `
             <div class="left-section">
-                <span class="line-number" data-line="${lineNumber}" data-mode="${transportMode}">${lineNumber}</span>
+                <span class="line-number" data-line="${escapeHtml(lineNumber)}" data-mode="${escapeHtml(transportMode)}">${escapeHtml(lineNumber)}</span>
                 <div class="destination-viewport">
-                    <span class="destination-text" data-destination="${destination}">${destination}</span>
+                    <span class="destination-text" data-destination="${escapeHtml(destination)}">${escapeHtml(destination)}</span>
                 </div>
             </div>
             <span class="time ${timeClass}">${time}</span>
@@ -214,7 +225,14 @@ class DisplayRenderer {
         );
 
         this.activeAnimations.push(animation);
-        await animation.finished;
+        try {
+            await animation.finished;
+        } finally {
+            // Ta bort ur listan direkt när den är klar — annars växer arrayen
+            // obegränsat under en långlivad scroll-cykel (minnesläcka 24/7)
+            const i = this.activeAnimations.indexOf(animation);
+            if (i >= 0) this.activeAnimations.splice(i, 1);
+        }
     }
 
     async triggerScrollCycle(destination, viewportElement) {
@@ -222,7 +240,10 @@ class DisplayRenderer {
         this.isScrolling = true;
 
         const destElement = viewportElement.querySelector('.destination-text');
-        if (!destElement) return;
+        if (!destElement) {
+            this.isScrolling = false; // annars blockeras framtida scroll permanent
+            return;
+        }
 
         const distance = this.calculateScrollDistance(destination, viewportElement);
         
@@ -246,7 +267,7 @@ class DisplayRenderer {
             timing.initialPause = Number.isFinite(cfgTiming.initialPause) ? cfgTiming.initialPause : timing.initialPause;
             timing.endPause = Number.isFinite(cfgTiming.endPause) ? cfgTiming.endPause : timing.endPause;
             timing.cyclePause = Number.isFinite(cfgTiming.cyclePause) ? cfgTiming.cyclePause : timing.cyclePause;
-            timing.pxPerSecond = Number.isFinite(cfgTiming.pxPerSecond) ? cfgTiming.pxPerSecond : timing.pxPerSecond;
+            timing.pxPerSecond = (Number.isFinite(cfgTiming.pxPerSecond) && cfgTiming.pxPerSecond > 0) ? cfgTiming.pxPerSecond : timing.pxPerSecond;
         }
 
         const travelMs = this.computeDurationMs(distance, timing.pxPerSecond);
@@ -307,8 +328,8 @@ class DisplayRenderer {
 
             html += `
                 <span class="scroll-item">
-                    <span class="scroll-line-number">${lineNumber}</span>
-                    ${destination} <span class="${timeClass}">${time}</span>
+                    <span class="scroll-line-number">${escapeHtml(lineNumber)}</span>
+                    ${escapeHtml(destination)} <span class="${timeClass}">${time}</span>
                 </span>
             `;
 

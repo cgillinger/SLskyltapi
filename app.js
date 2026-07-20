@@ -18,10 +18,15 @@ let currentDeviations = [];
 async function loadConfig() {
     try {
         // Använd config som redan laddats av index.html
+        // Defaults skyddar mot äldre/manuellt redigerade sparade configs
+        // som saknar nycklar — utan dem fryser tavlan med TypeError
+        const DISPLAY_DEFAULTS = { theme: 'classic', updateInterval: 30000, scrollSpeed: 8.8 };
+        const DEVIATIONS_DEFAULTS = { enabled: true, displayDuration: 10000, displayInterval: 30000 };
+
         if (window.configData) {
             config = {
-                display: window.configData.display,
-                deviations: window.configData.deviations,
+                display: { ...DISPLAY_DEFAULTS, ...(window.configData.display || {}) },
+                deviations: { ...DEVIATIONS_DEFAULTS, ...(window.configData.deviations || {}) },
                 styling: window.configData.styling,
                 departuresTable: window.configData.departuresTable || { maxDepartures: 10 }
             };
@@ -30,8 +35,8 @@ async function loadConfig() {
             const response = await fetch('config.json');
             const data = await response.json();
             config = {
-                display: data.display,
-                deviations: data.deviations,
+                display: { ...DISPLAY_DEFAULTS, ...(data.display || {}) },
+                deviations: { ...DEVIATIONS_DEFAULTS, ...(data.deviations || {}) },
                 styling: data.styling,
                 departuresTable: data.departuresTable || { maxDepartures: 10 }
             };
@@ -144,6 +149,72 @@ function getCachedLines(siteId) {
 window.getLinesCache = getLinesCache;
 window.getCachedLines = getCachedLines;
 window.updateLinesCache = updateLinesCache;  // FAS 2: Exponera för settings.js
+
+// ═══════════════════════════════════════════════════════════
+// DESTINATIONSMINNE FÖR A/B-RIKTNINGAR
+// A/B väljs alfabetiskt bland destinationerna i datat. När bara EN riktning
+// trafikeras (natt, ersättningstrafik) kollapsar det: B-skylten visar
+// A-riktningen. Minnet kommer ihåg vilka destinationer en station+linjefilter
+// brukar ha, så att en ensam destination kan placeras på RÄTT skylt.
+// ═══════════════════════════════════════════════════════════
+
+const DEST_CACHE_KEY = 'sl_destinations_cache';
+const DEST_CACHE_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
+
+function rememberDestinations(siteId, filterKey, destinations) {
+    if (!siteId || !destinations || destinations.length === 0) return;
+    try {
+        const cache = JSON.parse(localStorage.getItem(DEST_CACHE_KEY) || '{}');
+        const key = `${siteId}|${filterKey}`;
+        const entry = cache[key] || {};
+        const now = Date.now();
+        destinations.forEach(d => { entry[d] = now; });
+        Object.keys(entry).forEach(d => {
+            if (now - entry[d] > DEST_CACHE_EXPIRY_MS) delete entry[d];
+        });
+        cache[key] = entry;
+        localStorage.setItem(DEST_CACHE_KEY, JSON.stringify(cache));
+    } catch (e) { /* localStorage otillgänglig — minnet är bara en förbättring */ }
+}
+
+function getKnownDestinations(siteId, filterKey) {
+    try {
+        const cache = JSON.parse(localStorage.getItem(DEST_CACHE_KEY) || '{}');
+        return Object.keys(cache[`${siteId}|${filterKey}`] || {});
+    } catch (e) {
+        return [];
+    }
+}
+
+/**
+ * Väljer avgångar för riktning A/B ur destinationMap.
+ * Om exakt en destination finns i datat och minnet känner till precis två,
+ * mappas den ensamma destinationen till rätt skylt (fel skylt blir tom
+ * istället för att visa fel riktning). I övriga fall: alfabetisk A/B som förr.
+ */
+function selectDirectionDepartures(destinationMap, direction, siteId, filterKey) {
+    const current = Object.keys(destinationMap).sort();
+    if (current.length === 0) return [];
+
+    rememberDestinations(siteId, filterKey, current);
+
+    if (current.length === 1 && siteId) {
+        const known = getKnownDestinations(siteId, filterKey).sort();
+        if (known.length === 2) {
+            const pos = known.indexOf(current[0]);
+            if (pos !== -1) {
+                const letter = pos === 0 ? 'A' : 'B';
+                return direction === letter ? destinationMap[current[0]] : [];
+            }
+        }
+        // Okänt vilken riktning den ensamma destinationen tillhör:
+        // visa den på A, låt B vara tom (hellre tom än fel riktning)
+        return direction === 'A' ? destinationMap[current[0]] : [];
+    }
+
+    const target = direction === 'A' ? current[0] : (current[1] || current[0]);
+    return destinationMap[target] || [];
+}
 
 /**
  * Förhämta linjer för en station (används vid station-sökning i settings)
@@ -272,7 +343,7 @@ class DisplayManager {
                 // Filtrera riktning
                 if (line.direction && line.direction !== 'null') {
                     if (line.direction === 'A' || line.direction === 'B') {
-                        // A/B riktning
+                        // A/B riktning (med destinationsminne mot riktningskollaps)
                         const destinationMap = {};
                         lineFiltered.forEach(dep => {
                             const dest = dep.destination || dep.direction || 'OKÄND';
@@ -281,14 +352,10 @@ class DisplayManager {
                             }
                             destinationMap[dest].push(dep);
                         });
-                        
-                        const sortedDestinations = Object.keys(destinationMap).sort();
-                        if (sortedDestinations.length > 0) {
-                            const targetDest = line.direction === 'A' 
-                                ? sortedDestinations[0]
-                                : (sortedDestinations[1] || sortedDestinations[0]);
-                            lineFiltered = destinationMap[targetDest] || [];
-                        }
+
+                        lineFiltered = selectDirectionDepartures(
+                            destinationMap, line.direction, this.siteId, line.lineFilter || '*'
+                        );
                     } else {
                         // Specifik destination
                         lineFiltered = lineFiltered.filter(d => 
@@ -338,29 +405,16 @@ class DisplayManager {
             destinationMap[dest].push(dep);
         });
         
-        // STEG 5: Sortera destinationer alfabetiskt
-        const sortedDestinations = Object.keys(destinationMap).sort();
-        
-        if (sortedDestinations.length === 0) {
-            return [];
-        }
-        
-        // STEG 6: Välj destination baserat på A/B
-        let targetDestination;
-        
-        if (this.config.direction === 'A') {
-            // A = första destinationen alfabetiskt
-            targetDestination = sortedDestinations[0];
-        } else if (this.config.direction === 'B') {
-            // B = andra destinationen alfabetiskt
-            targetDestination = sortedDestinations[1] || sortedDestinations[0];
-        } else {
+        // STEG 5-7: Välj destination baserat på A/B (med destinationsminne)
+        if (this.config.direction !== 'A' && this.config.direction !== 'B') {
             // Okänd direction, visa allt
             return filtered;
         }
-        
-        // STEG 7: Returnera bara avgångar till vald destination
-        return destinationMap[targetDestination] || [];
+
+        const legacyFilterKey = `${this.config.transportMode || '*'}-${this.config.lineDesignation || '*'}`;
+        return selectDirectionDepartures(
+            destinationMap, this.config.direction, this.siteId, legacyFilterKey
+        );
     }
 
     
@@ -385,7 +439,13 @@ class DisplayManager {
         const departure = this.departures[0];
         
         if (!departure) {
-            // Ingen avgång - visa placeholder
+            // Ingen avgång - visa placeholder.
+            // VIKTIGT: nolla renderer-state — annars tar renderMainDeparture
+            // "snabbvägen" när samma linje+destination återkommer och
+            // uppdaterar bara tiden, så skylten fastnar på "INGA AVGÅNGAR".
+            this.renderer.stopScroll();
+            this.renderer.lastMainKey = null;
+
             const mainDiv = document.querySelector(`#${this.containerId} .main-departure`);
             if (mainDiv) {
                 mainDiv.innerHTML = `
@@ -417,19 +477,21 @@ class DisplayManager {
             return;
         }
         
-        // Kolla om det är dags att visa en störning
+        // Kolla om det är dags att visa en störning (per tavla — inte globalt,
+        // annars kan en stations skylt visa en annan stations störning)
+        const deviations = this.deviations || [];
         const timeSinceLastDeviation = now - this.lastDeviationTime;
-        const shouldShowDeviation = config.deviations.enabled && 
-                                   currentDeviations.length > 0 &&
+        const shouldShowDeviation = config.deviations.enabled &&
+                                   deviations.length > 0 &&
                                    timeSinceLastDeviation >= config.deviations.displayInterval;
-        
+
         if (shouldShowDeviation) {
             // Starta visning av störning
             this.showingDeviation = true;
             this.lastDeviationTime = now;
-            
-            // Visa störningen
-            scrollContent.innerHTML = `⚠ ${currentDeviations[this.deviationIndex % currentDeviations.length].message}`;
+
+            // Visa störningen (escapad — texten kommer från API:t)
+            scrollContent.innerHTML = `⚠ ${window.escapeHtml(deviations[this.deviationIndex % deviations.length].message)}`;
             this.deviationIndex++;
             
             // Sätt timer för att återgå till avgångar efter X sekunder
@@ -450,15 +512,17 @@ class DisplayManager {
         }
     }
     
-    update(allDepartures) {
+    update(allDepartures, deviations) {
         this.departures = this.filterDepartures(allDepartures);
-        
+        this.deviations = Array.isArray(deviations) ? deviations : [];
+
         if (this.departures.length > 0) {
-            this.scrollingDepartures = this.departures.slice(1, this.config.maxScrollingDepartures + 1);
+            const maxScrolling = this.config.maxScrollingDepartures || 3;
+            this.scrollingDepartures = this.departures.slice(1, maxScrolling + 1);
         } else {
             this.scrollingDepartures = [];
         }
-        
+
         this.updateMainDeparture();
         this.updateScrollingDepartures();
     }
@@ -562,7 +626,7 @@ function updateDeparturesTable(allDepartures, tavlaIndex = 0, tableLineFilter = 
         
         return `
             <tr>
-                <td><span class="table-line">${lineNumber}</span></td>
+                <td><span class="table-line">${window.escapeHtml(lineNumber)}</span></td>
                 <td>
                     <span class="traffic-icon">
                         <span class="traffic-top ${trafficIcon.class}"></span>
@@ -570,7 +634,7 @@ function updateDeparturesTable(allDepartures, tavlaIndex = 0, tableLineFilter = 
                         <span class="traffic-bottom"></span>
                     </span>
                 </td>
-                <td>${destination}</td>
+                <td>${window.escapeHtml(destination)}</td>
                 <td class="table-time">${time}</td>
             </tr>
         `;
@@ -638,17 +702,27 @@ async function updateAllDisplays() {
             continue;
         }
         
-        const allDepartures = data.departures.sort((a, b) => {
-            return new Date(a.expected) - new Date(b.expected);
-        });
-        
+        // Filtrera bort passerade avgångar (>60 s sedan) — annars kan en
+        // inaktuell avgång visa "Nu" för evigt, särskilt vid stale-serverad
+        // cache. Sortera sedan tidigast först.
+        const cutoff = Date.now() - 60 * 1000;
+        const allDepartures = data.departures
+            .filter(d => {
+                const t = new Date(d.expected || d.scheduled).getTime();
+                return !Number.isFinite(t) || t >= cutoff;
+            })
+            .sort((a, b) => {
+                return new Date(a.expected) - new Date(b.expected);
+            });
+
+        const tavlaDeviations = data.stop_deviations || [];
         if (data.stop_deviations) {
             currentDeviations = data.stop_deviations;
         }
-        
+
         // Uppdatera CSS-baserade displays för denna tavla
         tavla.displayManagers.forEach(manager => {
-            manager.update(allDepartures);
+            manager.update(allDepartures, tavlaDeviations);
         });
         
         // Uppdatera avgångstabell för denna tavla (med eventuellt linjefilter)
@@ -876,13 +950,26 @@ document.addEventListener('visibilitychange', () => {
 
 async function init() {
     console.log('Initierar SL Multi-Display Avgångstavla...');
-    
+
+    // Invänta index.html:s asynkrona config-laddning/tavla-bygge — annars
+    // kan init() hinna före en långsam config-fetch och ge en död tavla
+    if (window.tavlorReady) {
+        try { await window.tavlorReady; } catch (e) {
+            console.error('createTavlor misslyckades:', e);
+        }
+    }
+
+    // Vänta in webbfonterna så första scroll-mätningen sker med rätt font
+    if (document.fonts?.ready) {
+        try { await document.fonts.ready; } catch (e) { /* ignorera */ }
+    }
+
     await loadConfig();
     if (!config) {
         console.error('Kunde inte ladda konfiguration');
         return;
     }
-    
+
     // Hämta tavlor från window (skapat av index.html)
     const tavlorConfig = window.tavlorConfig || [];
     
@@ -920,9 +1007,10 @@ async function init() {
         };
         
         // Skapa display managers för denna tavla
-        tavlaConfig.displays.forEach((displayConfig, displayIndex) => {
+        (tavlaConfig.displays || []).forEach((displayConfig, displayIndex) => {
             const containerId = `tavla-${tavlaIndex}-display-${displayIndex}`;
             const manager = new DisplayManager(displayConfig, containerId);
+            manager.siteId = tavlaConfig.station?.siteId || null; // för destinationsminnet
             tavlaData.displayManagers.push(manager);
         });
         
@@ -931,7 +1019,7 @@ async function init() {
     
     await updateAllDisplays();
     
-    setInterval(updateAllDisplays, config.display.updateInterval);
+    setInterval(updateAllDisplays, config.display?.updateInterval || 30000);
     
     // iOS FIX: Starta scroll-animationer kontrollerat
     initScrollSafe();

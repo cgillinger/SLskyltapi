@@ -173,7 +173,7 @@
     "_2_ÄNDRA_ORIENTERING": "Sätt layout.orientation till 'vertical' eller 'horizontal'",
     "_3_ÄNDRA_MODE": "Vid horisontell: layout.mode till 'fixed' (skalning) eller 'floating' (scrollbar)",
     "_4_ÄNDRA_RIKTNING": "Sätt direction till 'A', 'B' eller null",
-    "_5_BYT_TEMA": "Ändra theme till 'classic', 'sci-fi' eller 'pixel-classic'",
+    "_5_BYT_TEMA": "Ändra theme till 'classic' eller 'sci-fi'",
     "_6_TABELL_RADER": "Ändra departuresTable.maxDepartures (standard: 10)"
   }
 }

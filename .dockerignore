@@ -55,3 +55,15 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Hemligheter — får ALDRIG bakas in i imagen
+.env
+
+# Skärmdumpar och lokala artefakter
+*.jpeg
+*.jpg
+.playwright-mcp/
+.claude/
+
+# Gamla manuella kopior
+*(kopia)*

@@ -3,7 +3,7 @@
 # ═══════════════════════════════════════════════════════════
 
 # Använd officiell Node.js 18 Alpine image (liten och säker)
-FROM node:18-alpine
+FROM node:22-alpine
 
 # Metadata
 LABEL maintainer="christian"

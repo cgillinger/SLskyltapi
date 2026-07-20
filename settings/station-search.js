@@ -22,9 +22,15 @@ class StationSearch {
 
         // Om cache finns och är färsk
         if (cached && cacheTime && (now - parseInt(cacheTime)) < this.cacheExpiry) {
-            this.cache = JSON.parse(cached);
-            console.log('✅ Laddade stations-cache från localStorage');
-            return this.cache;
+            try {
+                this.cache = JSON.parse(cached);
+                console.log('✅ Laddade stations-cache från localStorage');
+                return this.cache;
+            } catch (e) {
+                console.warn('⚠️ Trasig stations-cache — hämtar om från API');
+                localStorage.removeItem('sl_stations_cache');
+                localStorage.removeItem('sl_stations_cache_time');
+            }
         }
 
         // Hämta från API
@@ -297,19 +303,33 @@ class StationSearch {
             resultsContainer.innerHTML = '<div style="padding: 12px; text-align: center;"><span class="loading-spinner"></span></div>';
             resultsContainer.style.display = 'block';
 
-            // Sök
-            const results = await this.searchStations(query);
+            // Sök (try/catch: annars fastnar spinnern för evigt vid fel)
+            let results;
+            try {
+                results = await this.searchStations(query);
+            } catch (error) {
+                console.error('❌ Stationssökning misslyckades:', error);
+                resultsContainer.innerHTML = '<div style="padding: 12px; color: var(--sl-grey); text-align: center;">Sökningen misslyckades — försök igen</div>';
+                return;
+            }
+
+            // Skydd mot out-of-order-svar: visa bara om frågan fortfarande
+            // matchar det som står i fältet
+            if (inputElement.value !== query) {
+                return;
+            }
 
             if (results.length === 0) {
                 resultsContainer.innerHTML = '<div style="padding: 12px; color: var(--sl-grey); text-align: center;">Inga stationer hittades</div>';
                 return;
             }
 
-            // Visa resultat
+            // Visa resultat (escapade — namnen kommer från SL:s API)
+            const esc = window.escapeHtml || (s => String(s ?? ''));
             resultsContainer.innerHTML = results.map(station => `
-                <div class="station-result-item" data-id="${station.id}" data-name="${station.name}">
-                    <span class="station-result-name">${station.name}</span>
-                    <span class="station-result-id">(Site ID: ${station.id})</span>
+                <div class="station-result-item" data-id="${esc(station.id)}" data-name="${esc(station.name)}">
+                    <span class="station-result-name">${esc(station.name)}</span>
+                    <span class="station-result-id">(Site ID: ${esc(station.id)})</span>
                 </div>
             `).join('');
 
@@ -329,12 +349,21 @@ class StationSearch {
             });
         });
 
-        // Click utanför stänger resultat
-        document.addEventListener('click', (e) => {
-            if (!inputElement.contains(e.target) && !resultsContainer.contains(e.target)) {
-                resultsContainer.style.display = 'none';
-            }
-        });
+        // Click utanför stänger resultat.
+        // EN delegerad lyssnare för hela dokumentet — en per anrop läckte
+        // minne eftersom renderTavlor() återskapar autocompletes ofta och
+        // gamla lyssnare (med döda DOM-referenser) aldrig togs bort.
+        if (!StationSearch._outsideClickBound) {
+            document.addEventListener('click', (e) => {
+                document.querySelectorAll('.station-results').forEach(rc => {
+                    const input = rc.parentElement?.querySelector('input.station-search-input');
+                    if (!rc.contains(e.target) && !(input && input.contains(e.target))) {
+                        rc.style.display = 'none';
+                    }
+                });
+            });
+            StationSearch._outsideClickBound = true;
+        }
 
         // Focus visar tidigare resultat om de finns
         inputElement.addEventListener('focus', () => {

@@ -278,25 +278,52 @@
     <script>
         // Skapa tavlor dynamiskt baserat på config
         async function createTavlor() {
-            // Försök ladda från localStorage först
-            let config;
-            const savedConfig = localStorage.getItem('sl_tavla_config');
-            
-            if (savedConfig) {
-                try {
-                    config = JSON.parse(savedConfig);
-                    console.log('âœ… Laddade config från localStorage');
-                } catch (e) {
-                    console.warn('Ã¢Å¡Â Ã¯Â¸Â Kunde inte läsa localStorage, laddar från config.json');
-                    const response = await fetch('config.json');
-                    config = await response.json();
-                }
-            } else {
+            // KONFLIKTREGEL: serverns config.json är källan. En lokalt sparad
+            // config (från inställnings-UI:t) gäller BARA så länge serverns
+            // config.json är oförändrad sedan den sparades — annars vinner
+            // servern (deploy ska nå alla skärmar utan manuell rensning).
+            let config = null;
+            let serverText = null;
+
+            try {
                 const response = await fetch('config.json');
-                config = await response.json();
-                console.log('âœ… Laddade config från config.json (första gången)');
+                if (response.ok) serverText = await response.text();
+            } catch (e) {
+                console.warn('⚠️ Kunde inte hämta config.json (offline?)');
             }
-            
+
+            const savedText = localStorage.getItem('sl_tavla_config');
+            const baseText = localStorage.getItem('sl_tavla_config_base');
+
+            if (savedText && serverText && baseText !== serverText) {
+                console.log('🔄 config.json har ändrats på servern — lokal sparad config rensas');
+                localStorage.removeItem('sl_tavla_config');
+                localStorage.removeItem('sl_tavla_config_base');
+            } else if (savedText) {
+                try {
+                    config = JSON.parse(savedText);
+                    console.log('✅ Laddade config från localStorage');
+                } catch (e) {
+                    console.warn('⚠️ Trasig localStorage-config, faller tillbaka på config.json');
+                    localStorage.removeItem('sl_tavla_config');
+                }
+            }
+
+            if (!config && serverText) {
+                try {
+                    config = JSON.parse(serverText);
+                    console.log('✅ Laddade config från config.json');
+                } catch (e) {
+                    console.error('❌ config.json är inte giltig JSON');
+                }
+            }
+
+            if (!config) {
+                document.getElementById('tavlor-container').textContent =
+                    'Kunde inte ladda konfiguration — kontrollera servern och ladda om sidan.';
+                return;
+            }
+
             // För nu: 1 tavla från config.station
             // Framtida: config.tavlor med flera stationer
             const tavlor = config.tavlor || [{
@@ -325,7 +352,6 @@
             const tavlorContainer = document.getElementById('tavlor-container');
             const tavlaTemplate = document.getElementById('tavla-template');
             const displayTemplate = document.getElementById('display-template');
-            const pixelDisplayTemplate = document.getElementById('pixel-display-template');
             const theme = config.display?.theme || 'classic';
             
             // Applicera layout-orientering
@@ -362,7 +388,7 @@
                 
                 // Skapa displays för denna tavla
                 const displaysContainer = tavlaClone.querySelector('.tavla-displays');
-                const activeDisplays = tavlaConfig.displays.filter(d => !d._disabled);
+                const activeDisplays = (tavlaConfig.displays || []).filter(d => !d._disabled);
                 
                 activeDisplays.forEach((displayConfig, displayIndex) => {
                     const template = document.getElementById('display-template');
@@ -381,8 +407,9 @@
             window.configData = config;
         }
         
-        // Skapa tavlor innan andra scripts laddas
-        createTavlor();
+        // Skapa tavlor innan andra scripts laddas.
+        // Promisen exponeras så app.js init() kan invänta den (race-skydd).
+        window.tavlorReady = createTavlor();
     </script>
     
     <!-- Ladda Golden Example Display Renderer -->
