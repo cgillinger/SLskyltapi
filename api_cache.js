@@ -87,20 +87,23 @@ class CacheManager {
         console.error(`❌ Cache error för siteId=${siteId}: ${error.message}`);
     }
     
-    get(siteId) {
+    get(siteId, { allowStale = false } = {}) {
         const cached = this.cache.get(siteId);
-        
+
         if (!cached) {
             return null;
         }
-        
+
         // Kontrollera TTL
         const age = Date.now() - cached.timestamp;
         if (age > CONFIG.cacheTTL) {
+            if (allowStale) {
+                return { ...cached, stale: true };
+            }
             console.log(`⏰ Cache för siteId=${siteId} utgången (ålder: ${Math.round(age/1000)}s)`);
             return null;
         }
-        
+
         return cached;
     }
     
@@ -293,6 +296,30 @@ class PollingManager {
     }
     
     /**
+     * Tvingar fram en omedelbar polling-cykel (t.ex. när en klient
+     * träffar utgången cache). Guard mot parallella refreshar.
+     */
+    refreshNow(siteId) {
+        const poller = this.pollers.get(siteId);
+
+        if (!poller || !poller.active || poller.refreshing) {
+            return;
+        }
+
+        console.log(`⚡ Omedelbar refresh för siteId=${siteId} (stale cache serverad)`);
+        poller.refreshing = true;
+
+        if (poller.timeout) {
+            clearTimeout(poller.timeout);
+            poller.timeout = null;
+        }
+
+        this.pollOnce(siteId).finally(() => {
+            poller.refreshing = false;
+        });
+    }
+
+    /**
      * Stoppar polling för en siteId
      */
     stopPolling(siteId) {
@@ -395,9 +422,18 @@ app.get('/api/departures/:siteId', async (req, res) => {
         }
     }
     
-    // Hämta från cache
-    const cached = cache.get(siteId);
-    
+    // Hämta från cache — utgången data serveras hellre än 503, med en
+    // omedelbar bakgrundsuppdatering. (Cachen hinner annars gå ut mellan
+    // pollningar i idle-/nattläge: TTL 90s < intervall 180s/420s.)
+    let cached = cache.get(siteId);
+
+    if (!cached) {
+        cached = cache.get(siteId, { allowStale: true });
+        if (cached) {
+            pollingManager.refreshNow(siteId);
+        }
+    }
+
     if (!cached) {
         return res.status(503).json({
             error: 'Cache ännu inte tillgänglig',
@@ -418,7 +454,8 @@ app.get('/api/departures/:siteId', async (req, res) => {
         _version: APP_VERSION,
         _cache: {
             timestamp: cached.timestamp,
-            age: Math.round((Date.now() - cached.timestamp) / 1000)
+            age: Math.round((Date.now() - cached.timestamp) / 1000),
+            stale: !!cached.stale
         }
     });
 });
