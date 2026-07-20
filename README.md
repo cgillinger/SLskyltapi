@@ -4,10 +4,23 @@
 
 > Det här är ett personligt hobbyprojekt som jag byggt för eget bruk och lagt upp ifall det är till nytta för någon annan. Jag jobbar på det på fritiden, så issues och PR:ar är välkomna men svar kan dröja. Använd på egen risk.
 
-![Version](https://img.shields.io/badge/version-2.2.0-blue)
+![Version](https://img.shields.io/badge/version-3.1.0-blue)
 ![JavaScript](https://img.shields.io/badge/javascript-ES6+-yellow)
+![Node](https://img.shields.io/badge/node-22-green)
 ![API](https://img.shields.io/badge/API-SL%20Transport-orange)
 ![License](https://img.shields.io/badge/license-Private-red)
+
+---
+
+## 📸 Skärmdumpar
+
+**Avgångstavlan** — två tavlor (Mårtensdal + Luma) med två riktningsskyltar var plus avgångstabell. Här under Tvärbanans sommaravstängning: ersättningsbuss 30B och buss 74 grupperade per riktning:
+
+![Avgångstavlan med två stationer](docs/screenshots/avgangstavla.png)
+
+**Inställningarna** — skyltar konfigureras med linjefilter och riktning; riktningsvalen visar riktiga destinationsnamn ("→ Sickla udde") istället för abstrakta A/B:
+
+![Inställnings-UI med riktningsval](docs/screenshots/installningar.png)
 
 ---
 
@@ -35,42 +48,62 @@
 | **Art Deco 1920** | 1920-talsstil med mässing och mörkgrön sammet |
 
 ### 📊 Real-time Data
-- Hämtar live-data från **SL Transport API**
-- Uppdateras automatiskt var 30:e sekund
-- Visar aktuella avgångstider och förseningar
-- Störningsinformation inkluderad
+- Hämtar live-data från **SL Transport API** via en inbyggd cache/proxy-server
+- Klienten uppdateras var 30:e sekund; servern pollar SL smart (30 s–7 min beroende på trafikläge och tid på dygnet)
+- **Forecast-fönster**: avgångar hämtas upp till 3 h framåt (styrbart via `SL_FORECAST_MINUTES`, SL:s tak 1200 min) — tavlan går inte tom på kvällar/nätter
+- Visar aktuella avgångstider, förseningar och störningsinformation
+- **Stale-servering**: vid tillfälliga SL-fel visas senast kända data istället för en tom tavla
+
+### 🖥️ Server & drift
+- **Cache/proxy-server** (`api_cache.js`, Node 22 + Express) — en poller per station delas av alla klienter
+- **Automatisk klientuppdatering**: servern skickar en versionshash i varje svar; alla skärmar laddar om sig själva inom ~30 s efter en deploy
+- **Config-prioritering**: serverns `config.json` är källan — lokalt sparade inställningar (via UI:t) gäller bara tills serverns config ändras
+- Endast klientens filer serveras (allowlist); siteId valideras och antalet pollers är begränsat
+
+### ⚙️ Inställnings-UI
+- Hamburgarmenyn öppnar ett UI där tavlor/skyltar konfigureras per browser (sparas i localStorage)
+- **Riktningsval med riktiga namn**: dropdownen visar "→ Hornsberg" / "→ Sickla udde" istället för "Riktning A/B" — namnen lärs in per station+linje och förbättras ju längre appen kört
 
 ---
 
 ## 🚀 Snabbstart
 
-### Installation
-```bash
-# 1. Klona projektet
-git clone [repository-url]
-cd sl-avgangstavla
+Appen kräver Node-servern (klienten hämtar data via `/api/departures/`-proxyn — att öppna `index.html` direkt ger en tom tavla).
 
-# 2. Öppna i webbläsare
-open index.html
+### Alternativ 1: Node direkt
+```bash
+git clone https://github.com/cgillinger/SLskyltapi.git
+cd SLskyltapi
+npm install
+node api_cache.js
+# Öppna http://localhost:8200
 ```
 
-**Inga dependencies!** Vanilla JavaScript - fungerar direkt i moderna webbläsare.
+### Alternativ 2: Docker (rekommenderat för drift)
+```bash
+docker compose up -d --build
+# Öppna http://localhost:8200
+```
+`config.json` volymmonteras read-only — config-ändringar kräver bara omstart av containern, inte rebuild. Kodändringar kräver rebuild (`--build`).
 
 ---
 
 ## 📁 Filstruktur
 
 ```
-sl-avgangstavla/
-├── index.html              # HTML struktur + tema-dropdown
-├── app.js                  # Huvudlogik, tema-hantering (applyTheme)
+SLskyltapi/
+├── api_cache.js            # Cache/proxy-server (Node/Express, port 8200)
+├── index.html              # HTML-struktur + config-laddning
+├── app.js                  # Huvudlogik, filtrering, tema-hantering
 ├── styles.css              # Alla teman definieras här
 ├── display-renderer.js     # Renderar skyltar (data-attribut för linjefärger)
-├── config.json             # Konfiguration (stationer, filter)
+├── config.json             # Konfiguration (tavlor, skyltar, teman)
 ├── settings/
-│   ├── settings.js         # Inställningshanterare
-│   └── settings.css        # Inställnings-UI styling
-├── station-search.js       # Stationssökning
+│   ├── settings.js         # Inställnings-UI
+│   ├── settings.css        # Inställnings-UI styling
+│   └── station-search.js   # Stationssökning
+├── Dockerfile              # node:22-alpine
+├── docker-compose.yml      # Drift (port 8200, config-mount, healthcheck)
 ├── find_site_id.py         # Python-helper för site-IDs
 └── sl_stations.json        # Stationscache
 ```
@@ -303,24 +336,34 @@ body.theme-mitt-tema .display-wrapper .line-number[data-line="4"][data-mode="BUS
 
 ## 🛠️ Konfigurationsguide
 
-### Station Configuration
+Begrepp: en **tavla** = en station med avgångstabell; en **skylt** (display) = en LED-sektion i tavlan som filtrerar på linjer/riktning.
+
+### Tavla (station)
 ```json
-"station": {
-  "siteId": "1555",
-  "name": "Mårtensdal"
-}
+"tavlor": [
+  {
+    "station": { "siteId": "1555", "name": "Mårtensdal" },
+    "displays": [ ... ]
+  }
+]
 ```
 
-### Display Configuration
+### Skylt (display) — lines-format
+En skylt kan kombinera flera linjefilter, vart och ett med egen riktning:
 ```json
 {
-  "name": "Tvärbana",
-  "transportMode": "TRAM",
-  "lineDesignation": null,
-  "direction": "A",
+  "id": "martensdal-mot-sickla",
+  "name": "Mot Sickla",
+  "lines": [
+    { "lineFilter": "TRAM-*",  "direction": "A" },
+    { "lineFilter": "BUS-74",  "direction": "B" }
+  ],
   "maxScrollingDepartures": 3
 }
 ```
+- `lineFilter`: `"MODE-LINJE"` (t.ex. `"BUS-74"`), `"MODE-*"` (alla linjer av trafikslaget) eller `null` (alla linjer)
+- `direction`: `"A"`/`"B"` = alfabetiskt första/andra destinationen för filtret, `null` = båda riktningarna, eller ett exakt destinationsnamn. OBS: A/B bestäms per linje — buss 74:s A är Hornsberg medan spårvagnens A är Sickla
+- Det äldre formatet (`transportMode`/`lineDesignation`/`direction` direkt på skylten) stöds fortfarande och kan ligga parallellt med `lines` (externa läsare av configen använder det)
 
 ### Theme Configuration
 ```json
@@ -330,6 +373,11 @@ body.theme-mitt-tema .display-wrapper .line-number[data-line="4"][data-mode="BUS
   "updateInterval": 30000
 }
 ```
+
+### Server-miljövariabler
+| Variabel | Default | Beskrivning |
+|----------|---------|-------------|
+| `SL_FORECAST_MINUTES` | 180 | Tidsfönster framåt för avgångar (max 1200) |
 
 ---
 
@@ -347,12 +395,16 @@ python3 find_site_id.py
 
 ## 📊 API-användning
 
-### SL Transport API
-**Endpoint:** `https://transport.integration.sl.se/v1/sites/{siteId}/departures`
+### SL Transport API (uppströms)
+**Endpoint:** `https://transport.integration.sl.se/v1/sites/{siteId}/departures?forecast=180`
 
-**Ingen API-nyckel krävs!**
+**Ingen API-nyckel krävs.** Trafiklab anger inga hårda gränser, bara fair use ("not excessive requests") — proxyservern håller anropen nere genom delad polling per station (30 s när en avgång är nära, annars 1–7 min).
 
-**Rate limits:** ~30 anrop/minut (fair use)
+### Egna endpoints (proxyservern)
+| Endpoint | Beskrivning |
+|----------|-------------|
+| `GET /api/departures/:siteId` | Cachade avgångar (startar polling vid behov) |
+| `GET /api/status` | Serverstatus, version, cache/poller-info |
 
 ---
 
@@ -381,7 +433,7 @@ python3 find_site_id.py
 | Station | Site ID | Tillgänglig trafik |
 |---------|---------|-------------------|
 | Mårtensdal | 1555 | Tvärbana (30), Bussar |
-| Luma | 1624 | Tvärbana (30), Buss 74 |
+| Luma | 1552 | Tvärbana (30), Buss 74 |
 | Gullmarsplan | 9189 | Tunnelbana, Tvärbana, Bussar |
 | T-Centralen | 9001 | Tunnelbana, Pendeltåg, Bussar |
 | Slussen | 9192 | Tunnelbana, Bussar |
@@ -390,7 +442,22 @@ python3 find_site_id.py
 
 ## 📝 Changelog
 
-**v2.2.0** (Aktuell version)
+**v3.1.0** (juli 2026 — aktuell version)
+- Forecast-fönster: avgångar upp till 3 h framåt (`SL_FORECAST_MINUTES`, SL:s tak 1200 min)
+- Automatisk klientuppdatering vid deploy (versionshash + `Cache-Control: no-cache`)
+- Serverns config.json prioriteras över localStorage när den ändrats
+- Riktningsval i inställningarna visar riktiga destinationsnamn ("→ Hornsberg") via destinationsminne
+- Skyltar kan kombinera flera linjefilter med egen riktning per linje (`lines`-array)
+- Stale-servering vid SL-fel, race-fixar i polling, minnesläckor tätade, HTML-escaping av API-data
+- Statisk allowlist (endast klientfiler serveras), siteId-validering, poller-tak
+- node:22-alpine, graceful shutdown
+- Nattläget (gles polling 01–05) viker för nära förestående avgång
+
+**v3.0.0**
+- Cache/proxy-server (`api_cache.js`): delad polling per station, smart intervall (30 s–7 min), in-memory cache
+- Docker-deploy (Dockerfile + docker-compose, healthcheck)
+
+**v2.2.0**
 - 7 teman: Classic, Sci-Fi, E-Ink, Retro Terminal, SL Modern, SL Modern 2, Art Deco 1920
 - Tema-system med CSS-variabler och data-attribut för linjefärger
 - Förbättrad settings-UI med tooltips och visuell gruppering
@@ -406,7 +473,7 @@ python3 find_site_id.py
 
 ## 📚 Referenser
 
-- [SL Transport API Dokumentation](https://www.trafiklab.se/api/trafiklab-apis/sl/transport/)
+- [SL Transport API Dokumentation](https://www.trafiklab.se/api/our-apis/sl/transport/)
 - [SL Designmanual](https://sl.se) - Officiella designriktlinjer
 - [GTFS Format](https://gtfs.org/) - För kartfunktionalitet
 
