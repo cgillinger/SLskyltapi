@@ -1,16 +1,11 @@
 // ═══════════════════════════════════════════════════════════
-// SL API CACHE/PROXY SERVER + RESROBOT INTEGRATION
-// VERSION: 2.0.0 (senaste ändring: 2025-01-13)
-// Ansvar: Centraliserad polling mot SL, ResRobot rate limiting
+// SL API CACHE/PROXY SERVER
+// VERSION: 1.0.0
+// Ansvar: Centraliserad polling mot SL, exponerar lokal cache
 // ═══════════════════════════════════════════════════════════
 
 import express from 'express';
 import { setTimeout as sleep } from 'timers/promises';
-import { config } from 'dotenv';
-import { normalizeResRobotDeparture } from './resrobot_normalizer.js';
-
-// Ladda .env
-config();
 
 // ═══════════════════════════════════════════════════════════
 // KONFIGURATION
@@ -19,109 +14,34 @@ config();
 const CONFIG = {
     port: 8200,
     slApiBase: 'https://transport.integration.sl.se/v1',
-    resrobotApiBase: 'https://api.resrobot.se/v2.1',
-    resrobotApiKey: process.env.RESROBOT_API_KEY,
     
     // Cache TTL (millisekunder)
-    cacheTTL: 90 * 1000, // 90 sekunder
+    cacheTTL: 90 * 1000, // 90 sekunder (säkerhetsmarginal)
+
+    // Tidsfönster framåt i minuter för avgångar (SL API:ets maxvärde är 1200)
+    // Styr hur långt fram i tiden tavlan kan fyllas på med avgångar
+    forecastMinutes: Math.min(1200, Math.max(1, parseInt(process.env.SL_FORECAST_MINUTES) || 180)),
     
     // Polling intervaller (millisekunder)
     polling: {
-        immediate: 30 * 1000,
-        normal: 60 * 1000,
-        idle: 3 * 60 * 1000,
-        night: 7 * 60 * 1000
+        immediate: 30 * 1000,    // Nästa avgång ≤ 10 min
+        normal: 60 * 1000,       // Nästa avgång > 10 min
+        idle: 3 * 60 * 1000,     // Inga avgångar
+        night: 7 * 60 * 1000     // 01:00-05:00
     },
     
     // Natt-timmar (svensk tid)
-    nightHours: { start: 1, end: 5 },
-    
-    // ResRobot Rate Limiting (MULTI-CLIENT SAFE)
-    resrobot: {
-        maxCallsPerDay: parseInt(process.env.RESROBOT_MAX_CALLS_PER_DAY) || 25000,
-        rateLimitWindow: parseInt(process.env.RESROBOT_RATE_LIMIT_WINDOW) || 86400000
-    }
+    nightHours: { start: 1, end: 5 }
 };
 
 // ═══════════════════════════════════════════════════════════
-// RESROBOT RATE LIMITER (MULTI-CLIENT SAFE - SERVER-SIDE)
-// ═══════════════════════════════════════════════════════════
-
-class ResRobotRateLimiter {
-    constructor(maxCalls, windowMs) {
-        this.maxCalls = maxCalls;
-        this.windowMs = windowMs;
-        this.windowStart = Date.now();
-        this.callCount = 0;
-        
-        console.log(`🔒 ResRobot rate limiter: ${maxCalls} calls/${windowMs/1000}s (${windowMs/86400000} dagar)`);
-    }
-    
-    /**
-     * Kontrollera om anrop tillåts (MULTI-CLIENT SAFE)
-     */
-    canMakeCall() {
-        const now = Date.now();
-        
-        // Reset window om tiden gått ut
-        if (now - this.windowStart >= this.windowMs) {
-            console.log(`🔄 ResRobot rate limit window reset (${this.callCount} calls gjorda)`);
-            this.windowStart = now;
-            this.callCount = 0;
-        }
-        
-        return this.callCount < this.maxCalls;
-    }
-    
-    /**
-     * Registrera ett anrop (MULTI-CLIENT SAFE)
-     */
-    recordCall() {
-        this.callCount++;
-        const remaining = this.maxCalls - this.callCount;
-        const percentUsed = Math.round((this.callCount / this.maxCalls) * 100);
-        
-        console.log(`📞 ResRobot call #${this.callCount}/${this.maxCalls} (${remaining} kvar, ${percentUsed}% använt)`);
-        
-        // Varningar vid 80% och 90%
-        if (percentUsed === 80) {
-            console.warn(`⚠️ ResRobot quota 80% använd! (${remaining} calls kvar)`);
-        } else if (percentUsed === 90) {
-            console.warn(`🚨 ResRobot quota 90% använd! (${remaining} calls kvar)`);
-        }
-    }
-    
-    /**
-     * Hämta quota-status för UI
-     */
-    getQuotaStatus() {
-        const now = Date.now();
-        const windowAge = now - this.windowStart;
-        const windowRemaining = this.windowMs - windowAge;
-        
-        return {
-            callsUsed: this.callCount,
-            callsRemaining: this.maxCalls - this.callCount,
-            callsTotal: this.maxCalls,
-            percentUsed: Math.round((this.callCount / this.maxCalls) * 100),
-            windowRemainingMs: windowRemaining,
-            windowRemainingHours: Math.round(windowRemaining / 3600000)
-        };
-    }
-}
-
-// Global rate limiter (SHARED across ALL clients)
-const resrobotRateLimiter = new ResRobotRateLimiter(
-    CONFIG.resrobot.maxCallsPerDay,
-    CONFIG.resrobot.rateLimitWindow
-);
-
-// ═══════════════════════════════════════════════════════════
 // CACHE MANAGER
+// Hanterar in-memory cache med TTL per siteId
 // ═══════════════════════════════════════════════════════════
 
 class CacheManager {
     constructor() {
+        // Map: siteId → { data, timestamp, error }
         this.cache = new Map();
     }
     
@@ -152,6 +72,7 @@ class CacheManager {
             return null;
         }
         
+        // Kontrollera TTL
         const age = Date.now() - cached.timestamp;
         if (age > CONFIG.cacheTTL) {
             console.log(`⏰ Cache för siteId=${siteId} utgången (ålder: ${Math.round(age/1000)}s)`);
@@ -184,26 +105,35 @@ class CacheManager {
 
 // ═══════════════════════════════════════════════════════════
 // POLLING MANAGER
+// Hanterar smart polling per siteId enligt dynamiska regler
 // ═══════════════════════════════════════════════════════════
 
 class PollingManager {
     constructor(cacheManager) {
         this.cache = cacheManager;
+        
+        // Map: siteId → { active: boolean, timeout: NodeJS.Timeout }
         this.pollers = new Map();
     }
     
+    /**
+     * Bestämmer polling-intervall baserat på nästa avgång och tid på dygnet
+     */
     getPollingInterval(data) {
+        // Natt-logik (01:00-05:00)
         const hour = new Date().getHours();
         if (hour >= CONFIG.nightHours.start && hour < CONFIG.nightHours.end) {
             console.log(`🌙 Natt-läge (${hour}:00) → ${CONFIG.polling.night/1000}s intervall`);
             return CONFIG.polling.night;
         }
         
+        // Om inga avgångar
         if (!data?.departures || data.departures.length === 0) {
             console.log(`⏸️  Inga avgångar → ${CONFIG.polling.idle/1000}s intervall`);
             return CONFIG.polling.idle;
         }
         
+        // Hitta nästa avgång
         const nextDeparture = this.getNextDeparture(data.departures);
         
         if (!nextDeparture) {
@@ -221,6 +151,9 @@ class PollingManager {
         }
     }
     
+    /**
+     * Hittar nästa avgång och beräknar minuter till
+     */
     getNextDeparture(departures) {
         if (!departures || departures.length === 0) {
             return null;
@@ -247,8 +180,11 @@ class PollingManager {
         return null;
     }
     
+    /**
+     * Hämtar data från SL API
+     */
     async fetchFromSL(siteId) {
-        const url = `${CONFIG.slApiBase}/sites/${siteId}/departures`;
+        const url = `${CONFIG.slApiBase}/sites/${siteId}/departures?forecast=${CONFIG.forecastMinutes}`;
         
         try {
             console.log(`🔄 Hämtar från SL API: siteId=${siteId}`);
@@ -271,7 +207,11 @@ class PollingManager {
         }
     }
     
+    /**
+     * Startar polling för en siteId
+     */
     async startPolling(siteId) {
+        // Om redan aktiv, returnera
         if (this.pollers.has(siteId) && this.pollers.get(siteId).active) {
             console.log(`ℹ️  Polling redan aktiv för siteId=${siteId}`);
             return;
@@ -279,15 +219,20 @@ class PollingManager {
         
         console.log(`🚀 Startar polling för siteId=${siteId}`);
         
+        // Markera som aktiv
         const poller = {
             active: true,
             timeout: null
         };
         this.pollers.set(siteId, poller);
         
+        // Första hämtningen sker direkt
         await this.pollOnce(siteId);
     }
     
+    /**
+     * Gör EN polling-cykel
+     */
     async pollOnce(siteId) {
         const poller = this.pollers.get(siteId);
         
@@ -297,18 +242,25 @@ class PollingManager {
         }
         
         try {
+            // Hämta från SL
             const data = await this.fetchFromSL(siteId);
+            
+            // Uppdatera cache
             this.cache.set(siteId, data);
             
+            // Beräkna nästa intervall
             const interval = this.getPollingInterval(data);
             
+            // Schemalägg nästa polling
             poller.timeout = setTimeout(() => {
                 this.pollOnce(siteId);
             }, interval);
             
         } catch (error) {
+            // Vid fel, spara error i cache
             this.cache.setError(siteId, error);
             
+            // Försök igen om 2 minuter
             const retryInterval = 2 * 60 * 1000;
             console.log(`🔄 Försöker igen om ${retryInterval/1000}s för siteId=${siteId}`);
             
@@ -318,6 +270,9 @@ class PollingManager {
         }
     }
     
+    /**
+     * Stoppar polling för en siteId
+     */
     stopPolling(siteId) {
         const poller = this.pollers.get(siteId);
         
@@ -337,6 +292,9 @@ class PollingManager {
         this.pollers.delete(siteId);
     }
     
+    /**
+     * Hämtar status för alla pollers
+     */
     getStatus() {
         const status = [];
         
@@ -363,7 +321,7 @@ const pollingManager = new PollingManager(cache);
 
 const app = express();
 
-// CORS
+// CORS för lokal utveckling
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -371,7 +329,9 @@ app.use((req, res, next) => {
     next();
 });
 
-// Servera statiska filer
+// Servera statiska filer (HTML, CSS, JS, etc)
+// VIKTIGT: Denna måste komma FÖRE API-routes
+
 app.use(express.static('.', {
     setHeaders: (res, path) => {
         if (path.endsWith('.js')) {
@@ -386,17 +346,19 @@ app.use(express.static('.', {
 
 /**
  * GET /api/departures/:siteId
- * SL avgångar (befintlig endpoint)
+ * Returnerar cached avgångar, startar polling om ej aktiv
  */
 app.get('/api/departures/:siteId', async (req, res) => {
     const { siteId } = req.params;
     
     console.log(`📡 Request: /api/departures/${siteId}`);
     
+    // Kontrollera om polling är aktiv
     if (!pollingManager.pollers.has(siteId) || !pollingManager.pollers.get(siteId).active) {
         console.log(`🔄 Startar ny polling för siteId=${siteId}`);
         pollingManager.startPolling(siteId);
         
+        // Vänta lite för att få första datan (max 5 sekunder)
         let attempts = 0;
         while (attempts < 10) {
             await sleep(500);
@@ -408,6 +370,7 @@ app.get('/api/departures/:siteId', async (req, res) => {
         }
     }
     
+    // Hämta från cache
     const cached = cache.get(siteId);
     
     if (!cached) {
@@ -424,6 +387,7 @@ app.get('/api/departures/:siteId', async (req, res) => {
         });
     }
     
+    // Returnera data med metadata
     res.json({
         ...cached.data,
         _cache: {
@@ -434,93 +398,15 @@ app.get('/api/departures/:siteId', async (req, res) => {
 });
 
 /**
- * GET /api/resrobot/departures/:stopId
- * ResRobot avgångar med rate limiting
- */
-app.get('/api/resrobot/departures/:stopId', async (req, res) => {
-    const { stopId } = req.params;
-    
-    console.log(`🚂 ResRobot Request: stopId=${stopId}`);
-    
-    // Kontrollera API-nyckel
-    if (!CONFIG.resrobotApiKey || CONFIG.resrobotApiKey === 'your_api_key_here') {
-        return res.status(503).json({
-            error: 'ResRobot API-nyckel saknas',
-            message: 'Konfigurera RESROBOT_API_KEY i .env'
-        });
-    }
-    
-    // Kontrollera rate limit (MULTI-CLIENT SAFE)
-    if (!resrobotRateLimiter.canMakeCall()) {
-        const quota = resrobotRateLimiter.getQuotaStatus();
-        console.error(`🚨 ResRobot rate limit nådd! (${quota.callsUsed}/${quota.callsTotal})`);
-        
-        return res.status(429).json({
-            error: 'ResRobot rate limit nådd',
-            quota: quota,
-            message: `Försök igen om ${quota.windowRemainingHours}h`
-        });
-    }
-    
-    try {
-        // Anropa ResRobot API
-        const url = `${CONFIG.resrobotApiBase}/departureBoard?id=${stopId}&format=json&key=${CONFIG.resrobotApiKey}`;
-        
-        const response = await fetch(url);
-        
-        if (!response.ok) {
-            throw new Error(`ResRobot HTTP ${response.status}`);
-        }
-        
-        const data = await response.json();
-        
-        // Registrera anrop (MULTI-CLIENT SAFE)
-        resrobotRateLimiter.recordCall();
-        
-        // Normalisera avgångar till SL-format
-        const normalizedDepartures = (data.Departure || []).map(dep => {
-            try {
-                return normalizeResRobotDeparture(dep);
-            } catch (err) {
-                console.error(`⚠️ Kunde inte normalisera ResRobot-avgång:`, err);
-                return null;
-            }
-        }).filter(Boolean);
-        
-        console.log(`✅ ResRobot: ${normalizedDepartures.length} avgångar normaliserade`);
-        
-        res.json({
-            departures: normalizedDepartures,
-            _source: 'resrobot',
-            _quota: resrobotRateLimiter.getQuotaStatus()
-        });
-        
-    } catch (error) {
-        console.error(`❌ ResRobot error:`, error);
-        res.status(500).json({
-            error: error.message,
-            _quota: resrobotRateLimiter.getQuotaStatus()
-        });
-    }
-});
-
-/**
- * GET /api/resrobot/quota
- * ResRobot quota status för UI
- */
-app.get('/api/resrobot/quota', (req, res) => {
-    res.json(resrobotRateLimiter.getQuotaStatus());
-});
-
-/**
  * GET /api/status
- * Debugging endpoint
+ * Debugging endpoint för att se cache-status
  */
 app.get('/api/status', (req, res) => {
     res.json({
         config: {
             port: CONFIG.port,
             cacheTTL: CONFIG.cacheTTL / 1000,
+            forecastMinutes: CONFIG.forecastMinutes,
             polling: {
                 immediate: CONFIG.polling.immediate / 1000,
                 normal: CONFIG.polling.normal / 1000,
@@ -530,7 +416,6 @@ app.get('/api/status', (req, res) => {
         },
         cache: cache.getStats(),
         pollers: pollingManager.getStatus(),
-        resrobot: resrobotRateLimiter.getQuotaStatus(),
         uptime: process.uptime()
     });
 });
@@ -541,12 +426,10 @@ app.get('/api/status', (req, res) => {
  */
 app.get('/', (req, res) => {
     res.json({
-        name: 'SL API Cache/Proxy + ResRobot',
-        version: '2.0.0',
+        name: 'SL API Cache/Proxy',
+        version: '1.0.0',
         endpoints: {
-            sl_departures: '/api/departures/:siteId',
-            resrobot_departures: '/api/resrobot/departures/:stopId',
-            resrobot_quota: '/api/resrobot/quota',
+            departures: '/api/departures/:siteId',
             status: '/api/status'
         }
     });
@@ -559,11 +442,11 @@ app.get('/', (req, res) => {
 app.listen(CONFIG.port, () => {
     console.log('');
     console.log('═══════════════════════════════════════════════════════════');
-    console.log('🚀 SL + RESROBOT API CACHE/PROXY SERVER');
+    console.log('🚀 SL API CACHE/PROXY SERVER');
     console.log('═══════════════════════════════════════════════════════════');
     console.log(`📡 Port: ${CONFIG.port}`);
     console.log(`💾 Cache TTL: ${CONFIG.cacheTTL / 1000}s`);
-    console.log(`🔒 ResRobot rate limit: ${CONFIG.resrobot.maxCallsPerDay} calls/dag`);
+    console.log(`🔭 Forecast-fönster: ${CONFIG.forecastMinutes} min`);
     console.log(`⏱️  Polling intervaller:`);
     console.log(`   - Nästa avgång ≤ 10 min: ${CONFIG.polling.immediate / 1000}s`);
     console.log(`   - Nästa avgång > 10 min: ${CONFIG.polling.normal / 1000}s`);
@@ -574,19 +457,10 @@ app.listen(CONFIG.port, () => {
     console.log(`   http://localhost:${CONFIG.port}`);
     console.log('');
     console.log('🔗 API Endpoints:');
-    console.log(`   SL: http://localhost:${CONFIG.port}/api/departures/:siteId`);
-    console.log(`   ResRobot: http://localhost:${CONFIG.port}/api/resrobot/departures/:stopId`);
-    console.log(`   Quota: http://localhost:${CONFIG.port}/api/resrobot/quota`);
-    console.log(`   Status: http://localhost:${CONFIG.port}/api/status`);
+    console.log(`   http://localhost:${CONFIG.port}/api/departures/:siteId`);
+    console.log(`   http://localhost:${CONFIG.port}/api/status`);
     console.log('═══════════════════════════════════════════════════════════');
     console.log('');
-    
-    // Varning om API-nyckel saknas
-    if (!CONFIG.resrobotApiKey || CONFIG.resrobotApiKey === 'your_api_key_here') {
-        console.warn('⚠️  VARNING: ResRobot API-nyckel saknas!');
-        console.warn('   Konfigurera RESROBOT_API_KEY i .env för att aktivera ResRobot.');
-        console.warn('');
-    }
 });
 
 // Graceful shutdown
