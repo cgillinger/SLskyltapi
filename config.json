@@ -71,6 +71,13 @@
           "lineDesignation": "74",
           "direction": "B"
         }
+      ],
+      "_HALLLINES": "Extra linjer som BARA hallskärmen (flask-weather /hall) visar — anslagstavlans skyltar rörs inte (nattbuss 96 syns redan i dess avgångstabell). direction B = Sickla udde först, samma ordning som övriga linjer.",
+      "hallLines": [
+        {
+          "lineFilter": "BUS-96",
+          "direction": "B"
+        }
       ]
     },
     {
@@ -126,6 +133,13 @@
           "_INFO": "Tvärbana mot Solna (B) + ersättningsbuss 30B mot Stora Essingen (B) + buss 74 mot Hornsberg (A).",
           "transportMode": "BUS",
           "lineDesignation": "74",
+          "direction": "B"
+        }
+      ],
+      "_HALLLINES": "Extra linjer som BARA hallskärmen (flask-weather /hall) visar — anslagstavlans skyltar rörs inte (nattbuss 96 syns redan i dess avgångstabell). direction B = Sickla udde först, samma ordning som övriga linjer.",
+      "hallLines": [
+        {
+          "lineFilter": "BUS-96",
           "direction": "B"
         }
       ]
