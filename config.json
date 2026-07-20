@@ -1,26 +1,20 @@
 {
   "_FÖRKLARING": "Nycklar som börjar med _ är kommentarer och ignoreras av koden",
   "_EXEMPEL": "Använd 'id' för kod, '_KOMMENTAR' för förklaring",
-
   "_INFO_TAVLOR": "Varje tavla = En station med egna skyltar och avgångstabell",
-  
   "layout": {
     "orientation": "horizontal",
     "mode": "fixed",
-    
     "_ORIENTERING": {
       "vertical": "Tavlor staplade vertikalt (bra för mobil)",
       "horizontal": "Tavlor bredvid varandra (bra för skärm)"
     },
-    
     "_MODE": {
       "fixed": "Tavlor skalas för att få plats på skärmen (default)",
       "floating": "Scrollbar läggs till om tavlor inte får plats"
     },
-    
     "_OBS": "mode är bara relevant när orientation = horizontal"
   },
-  
   "tavlor": [
     {
       "_TAVLA_1": "Mårtensdal",
@@ -34,22 +28,40 @@
           "id": "martensdal-tram-sickla",
           "name": "Mot Sickla",
           "lines": [
-            { "lineFilter": "TRAM-*", "direction": "A" },
-            { "lineFilter": "BUS-30B", "direction": "A" }
+            {
+              "lineFilter": "TRAM-*",
+              "direction": "A"
+            },
+            {
+              "lineFilter": "BUS-30B",
+              "direction": "A"
+            }
           ],
           "maxScrollingDepartures": 3,
-          "_INFO": "A = Sickla (alfabetiskt första destinationen). BUS-30B = ersättningsbuss när Tvärbanan är avstängd."
+          "_INFO": "A = Sickla (alfabetiskt första destinationen). BUS-30B = ersättningsbuss när Tvärbanan är avstängd.",
+          "transportMode": "TRAM",
+          "lineDesignation": null,
+          "direction": "A"
         },
         {
           "_SEKTION_2": "Tvärbana mot Solna",
           "id": "martensdal-tram-solna",
           "name": "Mot Solna",
           "lines": [
-            { "lineFilter": "TRAM-*", "direction": "B" },
-            { "lineFilter": "BUS-30B", "direction": "B" }
+            {
+              "lineFilter": "TRAM-*",
+              "direction": "B"
+            },
+            {
+              "lineFilter": "BUS-30B",
+              "direction": "B"
+            }
           ],
           "maxScrollingDepartures": 3,
-          "_INFO": "B = Solna station (alfabetiskt andra). Ersättningsbuss 30B: B = Stora Essingen."
+          "_INFO": "B = Solna station (alfabetiskt andra). Ersättningsbuss 30B: B = Stora Essingen.",
+          "transportMode": "TRAM",
+          "lineDesignation": null,
+          "direction": "B"
         }
       ]
     },
@@ -65,27 +77,44 @@
           "id": "luma-tram-sickla",
           "name": "Mot Sickla",
           "lines": [
-            { "lineFilter": "TRAM-*", "direction": "A" },
-            { "lineFilter": "BUS-30B", "direction": "A" }
+            {
+              "lineFilter": "TRAM-*",
+              "direction": "A"
+            },
+            {
+              "lineFilter": "BUS-30B",
+              "direction": "A"
+            }
           ],
           "maxScrollingDepartures": 3,
-          "_INFO": "A = Sickla (alfabetiskt första destinationen). BUS-30B = ersättningsbuss när Tvärbanan är avstängd."
+          "_INFO": "A = Sickla (alfabetiskt första destinationen). BUS-30B = ersättningsbuss när Tvärbanan är avstängd.",
+          "transportMode": "TRAM",
+          "lineDesignation": null,
+          "direction": "A"
         },
         {
           "_SEKTION_2": "Tvärbana mot Solna",
           "id": "luma-tram-solna",
           "name": "Mot Solna",
           "lines": [
-            { "lineFilter": "TRAM-*", "direction": "B" },
-            { "lineFilter": "BUS-30B", "direction": "B" }
+            {
+              "lineFilter": "TRAM-*",
+              "direction": "B"
+            },
+            {
+              "lineFilter": "BUS-30B",
+              "direction": "B"
+            }
           ],
           "maxScrollingDepartures": 3,
-          "_INFO": "B = Solna station (alfabetiskt andra). Ersättningsbuss 30B: B = Stora Essingen."
+          "_INFO": "B = Solna station (alfabetiskt andra). Ersättningsbuss 30B: B = Stora Essingen.",
+          "transportMode": "TRAM",
+          "lineDesignation": null,
+          "direction": "B"
         }
       ]
     }
   ],
-
   "_ANDRA_STATIONER_REFERENCE": {
     "Gullmarsplan": "9118",
     "T-Centralen": "9001",
@@ -93,14 +122,12 @@
     "Odenplan": "9117",
     "Lumabryggan": "309"
   },
-
   "_RIKTNING": {
     "_ANVÄND": "'A', 'B' eller null - INTE siffror!",
     "_A": "Första destinationen (alfabetisk ordning)",
     "_B": "Andra destinationen (alfabetisk ordning)",
     "_null": "Båda riktningar"
   },
-
   "_TRAFIKSLAG": {
     "TRAM": "Spårvagn/tvärbana",
     "METRO": "Tunnelbana",
@@ -109,46 +136,38 @@
     "SHIP": "Båt",
     "null": "Alla trafikslag"
   },
-
   "display": {
     "theme": "classic",
     "updateInterval": 30000,
     "scrollSpeed": 8.8,
-    
     "_TEMAN": {
       "classic": "Ren LED-känsla (ingen glow)",
       "sci-fi": "Futuristisk display"
     },
-    
     "_SCROLL": "scrollSpeed i sekunder (standard: 8.8s = 30% snabbare än 12.6s)"
   },
-
   "departuresTable": {
     "maxDepartures": 10,
     "_INFO": "Antal avgångar att visa i tabellen per tavla (standard: 10)"
   },
-
   "sciFi": {
     "glowIntensity": 0.8,
     "backgroundColor": "#0a0e27",
     "primaryColor": "#00d9ff",
     "scrollColor": "#ffb300"
   },
-
   "classic": {
     "fontSize": "24px",
     "scrollFontSize": "18px",
     "primaryColor": "#ffb300",
     "backgroundColor": "#000000"
   },
-
   "deviations": {
     "enabled": true,
     "displayDuration": 10000,
     "displayInterval": 30000,
     "_INFO": "displayDuration = hur länge störningen visas (ms), displayInterval = väntetid mellan visningar (ms)"
   },
-
   "_SNABBGUIDE": {
     "_1_LÄGG_TILL_TAVLA": "Kopiera en tavla i 'tavlor'-arrayen, ändra siteId och namn",
     "_2_ÄNDRA_ORIENTERING": "Sätt layout.orientation till 'vertical' eller 'horizontal'",
