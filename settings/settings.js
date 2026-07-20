@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════
 // SETTINGS MANAGER - DEL 1
 // Core funktionalitet, modal, BIOS-stil ändringshantering
-// VERSION: 3.2.0 - Med cache-proxy integration och nattlinjemeddelande
+// VERSION: 3.3.0 - Med ResRobot v3.1 manual mapping UI
 // ═══════════════════════════════════════════════════════════
 
 class SettingsManager {
@@ -15,6 +15,9 @@ class SettingsManager {
         
         // Destination-cache per linje
         this.destinationCache = {};
+        
+        // ResRobot preview modal state
+        this.previewModal = null;
         
         this.init();
     }
@@ -114,7 +117,10 @@ class SettingsManager {
         });
         document.getElementById('import-file-input').addEventListener('change', (e) => this.import(e));
         
-        console.log('✅ SettingsManager v3.2 initierad (med cache-proxy)');
+        // Skapa preview modal
+        this.createPreviewModal();
+        
+        console.log('✅ SettingsManager v3.3.0 initierad (med ResRobot v3.1 UI)');
     }
     
     // ═══════════════════════════════════════════════════════════
@@ -340,12 +346,12 @@ class SettingsManager {
         }
         
         // Initiera _availableLines och _destinations för alla tavlor
-        // OCH rekonstruera lineFilter från transportMode/lineDesignation
         this.currentConfig.tavlor.forEach(tavla => {
             if (!tavla._availableLines) tavla._availableLines = [];
             if (!tavla._destinations) tavla._destinations = {};
+            if (!tavla.resRobotMapping) tavla.resRobotMapping = null; // NYT: ResRobot mapping
             
-            // Rekonstruera lineFilter för varje display
+            // Rekonstruera lineFilter från transportMode/lineDesignation
             tavla.displays.forEach(display => {
                 if (display.lineFilter === undefined) {
                     if (display.transportMode && display.lineDesignation) {
@@ -389,8 +395,6 @@ class SettingsManager {
 
     async fetchStationData(siteId) {
         // Hämta avgångar via cache-proxy och extrahera linjer + destinationer
-        // FÖRBÄTTRAD: Retry-logik för att hantera natt-scenario
-        
         let data = null;
         let attempts = 0;
         const maxAttempts = 3;
@@ -408,22 +412,19 @@ class SettingsManager {
                 
                 const result = await response.json();
                 
-                // Kolla om vi fick data
                 if (result.departures && result.departures.length > 0) {
                     data = result;
                     console.log(`✅ Fick ${result.departures.length} avgångar för station ${siteId}`);
                 } else if (result.error) {
                     console.warn(`⚠️ API-fel: ${result.error}`);
-                    // Retry
                     attempts++;
                     if (attempts < maxAttempts) {
                         console.log(`🔄 Väntar 2s innan retry...`);
                         await new Promise(resolve => setTimeout(resolve, 2000));
                     }
                 } else {
-                    // Inga avgångar just nu (kan vara normalt på natten)
                     console.log(`⚠️ Inga avgångar för station ${siteId} just nu`);
-                    data = result; // Använd tom data
+                    data = result;
                 }
                 
             } catch (error) {
@@ -436,19 +437,17 @@ class SettingsManager {
             }
         }
         
-        // Om vi inte fick någon data alls efter retries
         if (!data) {
             console.error(`❌ Kunde inte hämta data för station ${siteId} efter ${maxAttempts} försök`);
             return { lines: [], destinations: {} };
         }
         
-        // FAS 2: Uppdatera linje-cache så den finns direkt i settings
         if (data && data.departures && typeof window.updateLinesCache === 'function') {
             window.updateLinesCache(siteId, data.departures);
         }
         
         const linesMap = new Map();
-        const destinationsMap = {}; // lineKey -> Set of destinations
+        const destinationsMap = {};
         
         if (data.departures) {
             data.departures.forEach(dep => {
@@ -460,7 +459,6 @@ class SettingsManager {
                 if (designation && mode) {
                     const lineKey = `${mode}-${designation}`;
                     
-                    // Lägg till linje
                     if (!linesMap.has(lineKey)) {
                         linesMap.set(lineKey, {
                             designation,
@@ -470,7 +468,6 @@ class SettingsManager {
                         });
                     }
                     
-                    // Lägg till destination
                     if (!destinationsMap[lineKey]) {
                         destinationsMap[lineKey] = new Set();
                     }
@@ -481,13 +478,11 @@ class SettingsManager {
             });
         }
         
-        // Konvertera destinations Sets till sorterade arrays
         const destinations = {};
         Object.keys(destinationsMap).forEach(key => {
             destinations[key] = Array.from(destinationsMap[key]).sort();
         });
         
-        // Mergea med cache för att inkludera nattrafik
         const cachedLines = window.getCachedLines ? window.getCachedLines(siteId) : [];
         cachedLines.forEach(line => {
             const key = `${line.transport_mode}-${line.designation}`;
@@ -517,24 +512,19 @@ class SettingsManager {
     populateForm() {
         const config = this.currentConfig;
         
-        // FAS 2: Migration - sätt _createdAt på gamla tavlor som saknar det
         if (config.tavlor) {
             config.tavlor.forEach(tavla => {
                 if (!tavla._createdAt) {
-                    // Gamla tavlor får timestamp = nu (de är äldre än 24h så ingen varning visas)
-                    tavla._createdAt = Date.now() - (25 * 60 * 60 * 1000);  // 25h sedan
+                    tavla._createdAt = Date.now() - (25 * 60 * 60 * 1000);
                 }
             });
         }
 
-        // PAKET 2: Migrera gamla display-strukturer till multi-linje
         if (config.tavlor) {
             config.tavlor.forEach(tavla => {
                 if (tavla.displays) {
                     tavla.displays.forEach(display => {
-                        // Om gamla strukturen (lineFilter/direction) finns
                         if (display.lineFilter !== undefined && !display.lines) {
-                            // Migrera till ny struktur
                             display.lines = [];
                             if (display.lineFilter || display.direction) {
                                 display.lines.push({
@@ -542,11 +532,9 @@ class SettingsManager {
                                     direction: display.direction || null
                                 });
                             }
-                            // Ta bort gamla fält
                             delete display.lineFilter;
                             delete display.direction;
                         }
-                        // Om lines inte finns alls (helt ny skylt)
                         if (!display.lines) {
                             display.lines = [];
                         }
@@ -591,6 +579,135 @@ class SettingsManager {
     }
 
     // ═══════════════════════════════════════════════════════════
+    // RESROBOT PREVIEW MODAL
+    // ═══════════════════════════════════════════════════════════
+
+    createPreviewModal() {
+        const modal = document.createElement('div');
+        modal.className = 'preview-modal';
+        modal.id = 'resrobot-preview-modal';
+        modal.innerHTML = `
+            <div class="preview-overlay"></div>
+            <div class="preview-panel">
+                <div class="preview-header">
+                    <h3>🔍 Förhandsvisning: SL vs ResRobot</h3>
+                    <button class="preview-close">✖</button>
+                </div>
+                <div class="preview-content">
+                    <div class="preview-split">
+                        <div class="preview-column">
+                            <h4>📡 SL Data</h4>
+                            <div class="preview-departures sl-departures"></div>
+                        </div>
+                        <div class="preview-column">
+                            <h4>🚆 ResRobot Data</h4>
+                            <div class="preview-departures resrobot-departures"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="preview-footer">
+                    <button class="btn-secondary preview-cancel">Avbryt</button>
+                    <button class="btn-primary preview-confirm">Använd denna mappning</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        this.previewModal = modal;
+        
+        // Event handlers
+        modal.querySelector('.preview-close').addEventListener('click', () => this.closePreviewModal());
+        modal.querySelector('.preview-cancel').addEventListener('click', () => this.closePreviewModal());
+        modal.querySelector('.preview-overlay').addEventListener('click', () => this.closePreviewModal());
+    }
+
+    async showPreviewModal(slSiteId, resRobotStopId, resRobotStopName, tavlaIndex) {
+        if (!this.previewModal) return;
+        
+        this.previewModal.classList.add('active');
+        document.body.style.overflow = 'hidden';
+        
+        const slContainer = this.previewModal.querySelector('.sl-departures');
+        const rrContainer = this.previewModal.querySelector('.resrobot-departures');
+        const confirmBtn = this.previewModal.querySelector('.preview-confirm');
+        
+        // Loading state
+        slContainer.innerHTML = '<div class="preview-loading">Laddar SL-data...</div>';
+        rrContainer.innerHTML = '<div class="preview-loading">Laddar ResRobot-data...</div>';
+        
+        // Hämta SL data
+        try {
+            const slData = await this.fetchStationData(slSiteId);
+            slContainer.innerHTML = this.renderPreviewDepartures(slData.lines, 'SL');
+        } catch (error) {
+            slContainer.innerHTML = '<div class="preview-error">❌ Kunde inte ladda SL-data</div>';
+        }
+        
+        // Hämta ResRobot data
+        try {
+            const rrData = await window.resRobotSearch.previewDepartures(resRobotStopId, resRobotStopName);
+            if (rrData.error) {
+                rrContainer.innerHTML = `<div class="preview-error">❌ ${rrData.error}</div>`;
+            } else {
+                rrContainer.innerHTML = this.renderPreviewDepartures(rrData.departures, 'ResRobot');
+            }
+        } catch (error) {
+            rrContainer.innerHTML = '<div class="preview-error">❌ Kunde inte ladda ResRobot-data</div>';
+        }
+        
+        // Confirm button handler
+        confirmBtn.onclick = () => {
+            const tavla = this.currentConfig.tavlor[tavlaIndex];
+            tavla.resRobotMapping = {
+                stopId: resRobotStopId,
+                stopName: resRobotStopName,
+                mappedAt: Date.now()
+            };
+            this.logChange('modify', `ResRobot-mappning: ${resRobotStopName} → ${tavla.station.name}`);
+            this.closePreviewModal();
+            this.renderTavlor();
+        };
+    }
+
+    renderPreviewDepartures(data, source) {
+        if (!data || data.length === 0) {
+            return '<div class="preview-empty">Inga avgångar just nu</div>';
+        }
+        
+        // Om ResRobot, extrahera linjer från departures
+        let lines = [];
+        if (source === 'ResRobot') {
+            const linesMap = new Map();
+            data.forEach(dep => {
+                const key = `${dep.transport_mode}-${dep.line}`;
+                if (!linesMap.has(key)) {
+                    linesMap.set(key, {
+                        designation: dep.line,
+                        transport_mode: dep.transport_mode,
+                        destination: dep.destination
+                    });
+                }
+            });
+            lines = Array.from(linesMap.values());
+        } else {
+            lines = data;
+        }
+        
+        return lines.slice(0, 10).map(line => `
+            <div class="preview-line">
+                <span class="preview-line-badge">${line.designation}</span>
+                <span class="preview-line-dest">${line.destination || line.name || '—'}</span>
+            </div>
+        `).join('');
+    }
+
+    closePreviewModal() {
+        if (!this.previewModal) return;
+        this.previewModal.classList.remove('active');
+        document.body.style.overflow = '';
+    }
+
+    // ═══════════════════════════════════════════════════════════
     // HÄR SLUTAR DEL 1
     // ═══════════════════════════════════════════════════════════
 }
@@ -599,7 +716,7 @@ console.log('✅ SettingsManager DEL 1 laddad');
 // ═══════════════════════════════════════════════════════════
 // SETTINGS MANAGER - DEL 2
 // Tavlor, skyltar, kombinerad linje-dropdown, save/export
-// VERSION: 3.0.0 - Omdesignad UX
+// VERSION: 3.3.0 - Med ResRobot v3.1 manual mapping UI
 // ═══════════════════════════════════════════════════════════
 
 // HÄR BÖRJAR DEL 2
@@ -645,15 +762,11 @@ SettingsManager.prototype.createTavlaElement = function(tavla, index) {
     const displayCount = tavla.displays.length;
     const isExpanded = !tavla._collapsed;
     
-    // Hämta cache-info om station är vald
-    // FAS 2: Hämta cache-info MEN visa bara första 24h efter tavlan skapades
+    // Cache-info
     let cacheInfoHtml = '';
-    
-    // Kontrollera tavla-ålder (visa bara om < 24h gammal)
     const tavlaAge = tavla._createdAt ? (Date.now() - tavla._createdAt) / (1000 * 60 * 60) : 999;
-    const showCacheInfo = tavlaAge < 24;  // Visa bara första 24h
+    const showCacheInfo = tavlaAge < 24;
     
-    // Hantera olika states: loading, error, eller cache-info
     if (tavla._loadingLines) {
         cacheInfoHtml = `
             <div class="cache-info-box" style="background: linear-gradient(135deg, #fff3cd 0%, #fff8e1 100%); border-left-color: #ffc107;">
@@ -680,7 +793,6 @@ SettingsManager.prototype.createTavlaElement = function(tavla, index) {
         }
     }
 
-    
     div.innerHTML = `
         <div class="tavla-header" data-action="toggle">
             <div class="tavla-title">
@@ -705,7 +817,29 @@ SettingsManager.prototype.createTavlaElement = function(tavla, index) {
                 ${cacheInfoHtml}
             </div>
             
-            <!-- Tabellfilter (direkt under station) -->
+            <!-- ResRobot komplettering (opt-in) -->
+            <div class="setting-group resrobot-group" style="display: ${tavla.station.siteId ? 'block' : 'none'}">
+                <label class="setting-label">
+                    🚆 ResRobot komplettering (valfritt)
+                    <span class="info-badge" data-tooltip="Lägg till ResRobot-data för att fånga avgångar som SL missar (t.ex. vissa busslinjer). Kräver manuell mappning.">i</span>
+                </label>
+                <div class="resrobot-mapping-status">
+                    ${tavla.resRobotMapping ? `
+                        <div class="resrobot-mapped">
+                            <span class="resrobot-check">✓</span>
+                            <span class="resrobot-mapped-name">${tavla.resRobotMapping.stopName}</span>
+                            <button class="btn-small btn-resrobot-remove" data-tavla-index="${index}">Ta bort</button>
+                        </div>
+                    ` : `
+                        <div class="resrobot-search-wrapper">
+                            <input type="text" class="resrobot-search-input" placeholder="Sök ResRobot-station (min 3 tecken)..." data-tavla-index="${index}">
+                        </div>
+                        <div class="resrobot-quota-display"></div>
+                    `}
+                </div>
+            </div>
+            
+            <!-- Tabellfilter -->
             <div class="setting-group table-filter-group" style="display: ${tavla.station.siteId ? 'block' : 'none'}">
                 <label class="setting-label">
                     📊 Linjer i avgångstabellen
@@ -762,7 +896,6 @@ SettingsManager.prototype.createTavlaElement = function(tavla, index) {
         tavla.station.siteId = station.id;
         tavla.station.name = station.name;
         
-        // Rensa displays vid stationsbyte
         if (oldName && oldName !== station.name && tavla.displays.length > 0) {
             this.logChange('modify', `Tavla ${index + 1}: Bytte station (${oldName} → ${station.name}), skyltar rensade`);
             tavla.displays = [];
@@ -770,12 +903,10 @@ SettingsManager.prototype.createTavlaElement = function(tavla, index) {
             this.logChange('modify', `Tavla ${index + 1}: Station vald (${station.name})`);
         }
         
-        // Visa loading-indikator
         tavla._loadingLines = true;
         this.renderTavlor();
         
         try {
-            // Hämta data för nya stationen
             const data = await this.fetchStationData(station.id);
             tavla._availableLines = data.lines;
             tavla._destinations = data.destinations;
@@ -786,9 +917,25 @@ SettingsManager.prototype.createTavlaElement = function(tavla, index) {
             tavla._loadingError = true;
         }
         
-        // Re-render denna tavla
         this.renderTavlor();
     });
+    
+    // Event: ResRobot search
+    const resrobotInput = div.querySelector('.resrobot-search-input');
+    if (resrobotInput) {
+        this.createResRobotAutocomplete(resrobotInput, tavla, index);
+        this.updateResRobotQuota(div.querySelector('.resrobot-quota-display'));
+    }
+    
+    // Event: ResRobot remove mapping
+    const removeBtn = div.querySelector('.btn-resrobot-remove');
+    if (removeBtn) {
+        removeBtn.addEventListener('click', () => {
+            tavla.resRobotMapping = null;
+            this.logChange('remove', `ResRobot-mappning borttagen för ${tavla.station.name}`);
+            this.renderTavlor();
+        });
+    }
     
     // Render skyltar
     const skyltarList = div.querySelector('.skyltar-list');
@@ -806,9 +953,9 @@ SettingsManager.prototype.createTavlaElement = function(tavla, index) {
     // Event: Add skylt
     div.querySelector('.btn-add-skylt').addEventListener('click', () => {
         tavla.displays.push({
-            lines: [],  // PAKET 2: Array av {lineFilter, direction}
+            lines: [],
             maxScrollingDepartures: 3,
-            _collapsed: false  // Nya skyltar expanderade
+            _collapsed: false
         });
         this.logChange('add', `Skylt på ${tavla.station.name}`);
         this.renderTavlor();
@@ -823,10 +970,116 @@ SettingsManager.prototype.createTavlaElement = function(tavla, index) {
     return div;
 };
 
+// ═══════════════════════════════════════════════════════════
+// RESROBOT AUTOCOMPLETE
+// ═══════════════════════════════════════════════════════════
+
+SettingsManager.prototype.createResRobotAutocomplete = function(inputElement, tavla, tavlaIndex) {
+    let resultsContainer = inputElement.nextElementSibling;
+    
+    if (!resultsContainer || !resultsContainer.classList.contains('resrobot-results')) {
+        resultsContainer = document.createElement('div');
+        resultsContainer.className = 'resrobot-results';
+        resultsContainer.style.display = 'none';
+        inputElement.parentElement.appendChild(resultsContainer);
+    }
+
+    let searchTimeout = null;
+
+    inputElement.addEventListener('input', async (e) => {
+        const query = e.target.value;
+        
+        clearTimeout(searchTimeout);
+        
+        if (query.length < 3) {
+            resultsContainer.style.display = 'none';
+            return;
+        }
+
+        resultsContainer.innerHTML = '<div style="padding: 12px; text-align: center;"><span class="loading-spinner"></span></div>';
+        resultsContainer.style.display = 'block';
+
+        searchTimeout = setTimeout(async () => {
+            const response = await window.resRobotSearch.searchStations(query);
+
+            if (response.error) {
+                resultsContainer.innerHTML = `<div style="padding: 12px; color: #dc3545; text-align: center;">${response.error}</div>`;
+                return;
+            }
+
+            if (response.results.length === 0) {
+                resultsContainer.innerHTML = '<div style="padding: 12px; color: #666; text-align: center;">Inga stationer hittades</div>';
+                return;
+            }
+
+            resultsContainer.innerHTML = response.results.map(stop => `
+                <div class="resrobot-result-item" data-stop-id="${stop.id}" data-stop-name="${stop.name}">
+                    <span class="resrobot-result-name">${stop.name}</span>
+                    <span class="resrobot-result-id">(${stop.id})</span>
+                </div>
+            `).join('');
+
+            resultsContainer.querySelectorAll('.resrobot-result-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    const stopId = item.dataset.stopId;
+                    const stopName = item.dataset.stopName;
+                    
+                    inputElement.value = stopName;
+                    resultsContainer.style.display = 'none';
+                    
+                    // Öppna preview modal
+                    this.showPreviewModal(tavla.station.siteId, stopId, stopName, tavlaIndex);
+                });
+            });
+        }, 500);
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!inputElement.contains(e.target) && !resultsContainer.contains(e.target)) {
+            resultsContainer.style.display = 'none';
+        }
+    });
+};
+
+SettingsManager.prototype.updateResRobotQuota = async function(container) {
+    if (!container) return;
+    
+    try {
+        const quota = await window.resRobotSearch.getQuotaStatus();
+        
+        if (quota.error) {
+            container.innerHTML = `<div class="quota-error">⚠️ ${quota.error}</div>`;
+            return;
+        }
+        
+        const percentage = Math.round(quota.percentage);
+        const remaining = quota.remaining;
+        
+        let statusClass = 'quota-ok';
+        if (percentage > 80) statusClass = 'quota-high';
+        else if (percentage > 50) statusClass = 'quota-medium';
+        
+        container.innerHTML = `
+            <div class="quota-status ${statusClass}">
+                <span class="quota-label">API-kvot:</span>
+                <span class="quota-value">${remaining} / ${quota.limit}</span>
+                <span class="quota-bar">
+                    <span class="quota-fill" style="width: ${percentage}%"></span>
+                </span>
+            </div>
+        `;
+    } catch (error) {
+        console.error('❌ Quota status error:', error);
+    }
+};
+
+// ═══════════════════════════════════════════════════════════
+// DISPLAY ELEMENTS (Fortsätter från befintlig kod)
+// ═══════════════════════════════════════════════════════════
+
 SettingsManager.prototype.createDisplayElement = function(display, tavla, tavlaIndex, displayIndex) {
     const div = document.createElement('div');
     
-    // DEFAULT: Skyltar kollapsade
     if (display._collapsed === undefined) {
         display._collapsed = true;
     }
@@ -834,15 +1087,12 @@ SettingsManager.prototype.createDisplayElement = function(display, tavla, tavlaI
     
     div.className = `skylt-card${display._collapsed ? ' collapsed' : ''}`;
     
-    // PAKET 2: Säkerställ lines array finns
     if (!display.lines) {
         display.lines = [];
     }
     
-    // Generera skylt-namn baserat på lines
     const skyltName = this.generateSkyltName(display, tavla);
     
-    // Skapa HTML för skylten
     div.innerHTML = `
         <div class="skylt-header" data-action="toggle">
             <div class="skylt-title">
@@ -872,14 +1122,12 @@ SettingsManager.prototype.createDisplayElement = function(display, tavla, tavlaI
         </div>
     `;
     
-    // Rendera alla linjer
     const linesContainer = div.querySelector('.lines-container');
     display.lines.forEach((line, lineIndex) => {
         const lineElement = this.createLineElement(line, lineIndex, tavla, display);
         linesContainer.appendChild(lineElement);
     });
     
-    // Event: Toggle collapse
     div.querySelector('.skylt-header').addEventListener('click', (e) => {
         if (e.target.closest('.btn-delete-skylt')) return;
         
@@ -891,14 +1139,12 @@ SettingsManager.prototype.createDisplayElement = function(display, tavla, tavlaI
         icon.textContent = display._collapsed ? '▶' : '▼';
     });
     
-    // Event: Delete skylt
     div.querySelector('.btn-delete-skylt').addEventListener('click', () => {
         this.logChange('remove', `Skylt: ${skyltName}`);
         tavla.displays.splice(displayIndex, 1);
         this.renderTavlor();
     });
     
-    // Event: Add line
     div.querySelector('.btn-add-line').addEventListener('click', () => {
         if (display.lines.length >= 5) {
             alert('Max 5 linjer per skylt');
@@ -913,7 +1159,6 @@ SettingsManager.prototype.createDisplayElement = function(display, tavla, tavlaI
         this.renderTavlor();
     });
     
-    // Event: Scroll count change
     div.querySelector('.skylt-scroll-input').addEventListener('change', (e) => {
         display.maxScrollingDepartures = parseInt(e.target.value) || 3;
         this.logChange('modify', `Scroll-avgångar: ${display.maxScrollingDepartures}`);
@@ -922,12 +1167,10 @@ SettingsManager.prototype.createDisplayElement = function(display, tavla, tavlaI
     return div;
 };
 
-// PAKET 2: Ny funktion för att skapa linje-element
 SettingsManager.prototype.createLineElement = function(line, lineIndex, tavla, display) {
     const div = document.createElement('div');
     div.className = 'line-row';
     
-    // Bygg dropdown-options
     const lineOptions = this.buildLineDropdownOptions(tavla._availableLines || []);
     const directionOptions = this.buildDirectionOptions(line.lineFilter, tavla._destinations || {});
     
@@ -962,25 +1205,21 @@ SettingsManager.prototype.createLineElement = function(line, lineIndex, tavla, d
         ${lineIndex < display.lines.length - 1 ? '<div class="line-separator"></div>' : ''}
     `;
     
-    // Set current values
     const lineSelect = div.querySelector('.line-filter-select');
     const dirSelect = div.querySelector('.line-direction-select');
     
     lineSelect.value = line.lineFilter || '';
     dirSelect.value = line.direction || '';
     
-    // Event: Line change
     lineSelect.addEventListener('change', (e) => {
         line.lineFilter = e.target.value || null;
         
-        // Uppdatera riktning-dropdown
         dirSelect.innerHTML = this.buildDirectionOptions(line.lineFilter, tavla._destinations || {});
         dirSelect.value = '';
         line.direction = null;
         
         this.logChange('modify', `Linje ${lineIndex + 1} ändrad`);
         
-        // Uppdatera skylt-namn i headern
         const skyltCard = div.closest('.skylt-card');
         if (skyltCard) {
             const nameSpan = skyltCard.querySelector('.skylt-name');
@@ -990,12 +1229,10 @@ SettingsManager.prototype.createLineElement = function(line, lineIndex, tavla, d
         }
     });
     
-    // Event: Direction change
     dirSelect.addEventListener('change', (e) => {
         line.direction = e.target.value || null;
         this.logChange('modify', `Riktning ${lineIndex + 1} ändrad`);
         
-        // Uppdatera skylt-namn i headern
         const skyltCard = div.closest('.skylt-card');
         if (skyltCard) {
             const nameSpan = skyltCard.querySelector('.skylt-name');
@@ -1005,7 +1242,6 @@ SettingsManager.prototype.createLineElement = function(line, lineIndex, tavla, d
         }
     });
     
-    // Event: Delete line
     div.querySelector('.btn-delete-line').addEventListener('click', () => {
         if (display.lines.length === 1) {
             alert('En skylt måste ha minst en linje');
@@ -1020,11 +1256,9 @@ SettingsManager.prototype.createLineElement = function(line, lineIndex, tavla, d
     return div;
 };
 
-
 SettingsManager.prototype.buildLineDropdownOptions = function(lines) {
     let html = '<option value="">Alla linjer</option>';
     
-    // Gruppera per trafikslag
     const byMode = {};
     lines.forEach(line => {
         const mode = line.transport_mode;
@@ -1032,7 +1266,6 @@ SettingsManager.prototype.buildLineDropdownOptions = function(lines) {
         byMode[mode].push(line);
     });
     
-    // Lägg till "Alla X" per trafikslag
     const modes = Object.keys(byMode).sort();
     if (modes.length > 0) {
         html += '<optgroup label="Per trafikslag">';
@@ -1044,7 +1277,6 @@ SettingsManager.prototype.buildLineDropdownOptions = function(lines) {
         html += '</optgroup>';
     }
     
-    // Enskilda linjer per trafikslag
     modes.forEach(mode => {
         const info = TRANSPORT_MODE_NAMES[mode] || { name: mode, icon: '🚉' };
         const modeLines = byMode[mode].sort((a, b) => {
@@ -1069,17 +1301,14 @@ SettingsManager.prototype.buildDirectionOptions = function(lineFilter, destinati
     let html = '<option value="">Båda riktningar</option>';
     
     if (!lineFilter || lineFilter.endsWith('-*')) {
-        // Kan inte visa specifika destinationer för "alla" eller "alla av trafikslag"
         html += '<option value="A">A (första alfabetiskt)</option>';
         html += '<option value="B">B (andra alfabetiskt)</option>';
         return html;
     }
     
-    // Hämta destinationer för specifik linje
     const lineDestinations = destinations[lineFilter];
     
     if (lineDestinations && lineDestinations.length > 0) {
-        // Sortera alfabetiskt (A = första, B = andra)
         const sorted = [...lineDestinations].sort();
         
         if (sorted.length >= 1) {
@@ -1088,12 +1317,10 @@ SettingsManager.prototype.buildDirectionOptions = function(lineFilter, destinati
         if (sorted.length >= 2) {
             html += `<option value="B">→ ${sorted[1]}</option>`;
         }
-        // Om fler än 2 destinationer (ovanligt), visa dem också
         for (let i = 2; i < sorted.length; i++) {
             html += `<option value="${sorted[i]}">→ ${sorted[i]}</option>`;
         }
     } else {
-        // Fallback om inga destinationer hittades
         html += '<option value="A">A (första alfabetiskt)</option>';
         html += '<option value="B">B (andra alfabetiskt)</option>';
     }
@@ -1102,20 +1329,16 @@ SettingsManager.prototype.buildDirectionOptions = function(lineFilter, destinati
 };
 
 SettingsManager.prototype.generateSkyltName = function(display, tavla) {
-    // PAKET 2: Hantera flera linjer
     if (!display.lines || display.lines.length === 0) {
         return 'Ingen linje vald';
     }
     
-    // Om bara en linje - visa som förut
     if (display.lines.length === 1) {
         const line = display.lines[0];
         const lineFilter = line.lineFilter;
         const direction = line.direction;
         
-        // PRIORITET 1: Om destination är vald, visa den först
         if (direction) {
-            // Specifik destination (inte A/B)
             if (direction !== 'A' && direction !== 'B') {
                 if (lineFilter && !lineFilter.endsWith('-*')) {
                     const [mode, designation] = lineFilter.split('-');
@@ -1125,7 +1348,6 @@ SettingsManager.prototype.generateSkyltName = function(display, tavla) {
                 return `→ ${direction}`;
             }
             
-            // A/B-riktning - hämta faktisk destination
             if (lineFilter && tavla._destinations) {
                 const destKey = lineFilter.endsWith('-*') ? null : lineFilter;
                 
@@ -1140,7 +1362,6 @@ SettingsManager.prototype.generateSkyltName = function(display, tavla) {
                 }
             }
             
-            // Fallback för A/B utan känd destination
             const dirLabel = direction === 'A' ? 'riktning A' : 'riktning B';
             if (lineFilter && lineFilter.endsWith('-*')) {
                 const mode = lineFilter.replace('-*', '');
@@ -1154,26 +1375,21 @@ SettingsManager.prototype.generateSkyltName = function(display, tavla) {
             }
         }
         
-        // PRIORITET 2: Om ingen destination men lineFilter finns
         if (lineFilter) {
             if (lineFilter.endsWith('-*')) {
-                // "Alla X"
                 const mode = lineFilter.replace('-*', '');
                 const info = TRANSPORT_MODE_NAMES[mode] || { name: mode };
                 return `Alla ${info.name.toLowerCase()}`;
             } else {
-                // Specifik linje
                 const [mode, designation] = lineFilter.split('-');
                 const info = TRANSPORT_MODE_NAMES[mode] || { icon: '🚉' };
                 return `${info.icon} ${designation}`;
             }
         }
         
-        // Fallback
         return 'Alla linjer';
     }
     
-    // Flera linjer - sammanfatta
     const lineDesignations = [];
     let totalDirections = 0;
     
@@ -1188,7 +1404,6 @@ SettingsManager.prototype.generateSkyltName = function(display, tavla) {
     });
     
     if (lineDesignations.length > 0) {
-        // Visa linjebeteckningar
         const lineList = lineDesignations.slice(0, 3).join(', ');
         const moreCount = lineDesignations.length - 3;
         
@@ -1197,7 +1412,6 @@ SettingsManager.prototype.generateSkyltName = function(display, tavla) {
             result += ` +${moreCount} till`;
         }
         
-        // Lägg till riktningsinfo
         if (totalDirections > 0) {
             result += ` → ${totalDirections} riktning${totalDirections !== 1 ? 'ar' : ''}`;
         }
@@ -1205,10 +1419,8 @@ SettingsManager.prototype.generateSkyltName = function(display, tavla) {
         return result;
     }
     
-    // Bara "Alla X" val
     return `${display.lines.length} linjer`;
 };
-
 
 SettingsManager.prototype.renderTableFilterCompact = function(tavla, tavlaIndex, container) {
     const lines = tavla._availableLines || [];
@@ -1218,11 +1430,9 @@ SettingsManager.prototype.renderTableFilterCompact = function(tavla, tavlaIndex,
         return;
     }
     
-    // Räkna valda
     const allKeys = lines.map(l => `${l.transport_mode}-${l.designation}`);
     const filter = tavla.tableLineFilter;
     
-    // Hantera både object och null
     const selectedCount = filter ? Object.keys(filter).length : allKeys.length;
     const showingAll = !filter || Object.keys(filter).length === 0 || Object.keys(filter).length === allKeys.length;
     
@@ -1234,7 +1444,6 @@ SettingsManager.prototype.renderTableFilterCompact = function(tavla, tavlaIndex,
         <div class="filter-detail" style="display: none;"></div>
     `;
     
-    // Event: Expandera filter
     container.querySelector('.btn-edit-filter').addEventListener('click', () => {
         const detail = container.querySelector('.filter-detail');
         const isVisible = detail.style.display !== 'none';
@@ -1249,7 +1458,6 @@ SettingsManager.prototype.renderTableFilterCompact = function(tavla, tavlaIndex,
 };
 
 SettingsManager.prototype.renderTableFilterDetail = function(tavla, tavlaIndex, container, lines) {
-    // Gruppera per trafikslag
     const byMode = {};
     lines.forEach(line => {
         const mode = line.transport_mode;
@@ -1283,12 +1491,10 @@ SettingsManager.prototype.renderTableFilterDetail = function(tavla, tavlaIndex, 
             const key = `${mode}-${line.designation}`;
             const lineDestinations = destinations[key] || [];
             
-            // Nuvarande filter
             const currentFilter = tavla.tableLineFilter || {};
             const isChecked = currentFilter.hasOwnProperty(key);
             const currentDirection = isChecked ? currentFilter[key] : 'both';
             
-            // Bygg dropdown options
             let directionOptions = '<option value="both">Båda riktningar</option>';
             if (lineDestinations.length > 0) {
                 directionOptions += '<option disabled>──────────────</option>';
@@ -1315,7 +1521,6 @@ SettingsManager.prototype.renderTableFilterDetail = function(tavla, tavlaIndex, 
     html += '</div>';
     container.innerHTML = html;
     
-    // Event handlers
     const updateFilter = () => {
         const newFilter = {};
         
@@ -1326,21 +1531,18 @@ SettingsManager.prototype.renderTableFilterDetail = function(tavla, tavlaIndex, 
             newFilter[key] = direction;
         });
         
-        // Om alla linjer valda med "both", sätt till null
         const allKeys = lines.map(l => `${l.transport_mode}-${l.designation}`);
         const allSelected = Object.keys(newFilter).length === allKeys.length;
         const allBoth = allSelected && Object.values(newFilter).every(v => v === 'both');
         
         tavla.tableLineFilter = (allBoth || Object.keys(newFilter).length === 0) ? null : newFilter;
         
-        // Uppdatera summary
         const filterGroup = container.closest('.table-filter-group');
         const summary = filterGroup.querySelector('.filter-count');
         const count = Object.keys(newFilter).length;
         summary.textContent = !tavla.tableLineFilter ? 'Alla linjer' : `${count} av ${allKeys.length} linjer`;
     };
     
-    // Checkbox change - enable/disable dropdown
     container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
         cb.addEventListener('change', (e) => {
             const key = e.target.dataset.key;
@@ -1352,12 +1554,10 @@ SettingsManager.prototype.renderTableFilterDetail = function(tavla, tavlaIndex, 
         });
     });
     
-    // Dropdown change
     container.querySelectorAll('.direction-select').forEach(select => {
         select.addEventListener('change', updateFilter);
     });
     
-    // Select all/none buttons
     container.querySelector('.btn-select-all').addEventListener('click', () => {
         container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
             cb.checked = true;
@@ -1385,10 +1585,11 @@ SettingsManager.prototype.addTavla = function() {
         station: { siteId: '', name: '' },
         displays: [],
         tableLineFilter: null,
+        resRobotMapping: null,
         _availableLines: [],
         _destinations: {},
         _collapsed: false,
-        _createdAt: Date.now(),  // FAS 2: Timestamp när tavlan skapades
+        _createdAt: Date.now(),
     });
     this.logChange('add', `Ny tavla`);
     this.renderTavlor();
@@ -1399,7 +1600,6 @@ SettingsManager.prototype.addTavla = function() {
 // ═══════════════════════════════════════════════════════════
 
 SettingsManager.prototype.collectFormData = function() {
-    // Samla värden från formulär till currentConfig
     this.currentConfig.layout.orientation = document.getElementById('setting-orientation').value;
     this.currentConfig.layout.mode = document.getElementById('setting-mode').value;
     this.currentConfig.display.theme = document.getElementById('setting-theme').value;
@@ -1424,23 +1624,20 @@ SettingsManager.prototype.validate = function() {
 };
 
 SettingsManager.prototype.cleanConfigForSave = function(config) {
-    // Ta bort temporära fält som börjar med _
     const clean = JSON.parse(JSON.stringify(config));
     
     clean.tavlor.forEach(tavla => {
         delete tavla._availableLines;
         delete tavla._destinations;
         delete tavla._collapsed;
+        delete tavla._createdAt;
         
-        // Konvertera nya lineFilter till gammalt format för bakåtkompatibilitet
         tavla.displays.forEach(display => {
             if (display.lineFilter) {
                 if (display.lineFilter.endsWith('-*')) {
-                    // "MODE-*" -> transportMode utan lineDesignation
                     display.transportMode = display.lineFilter.replace('-*', '');
                     display.lineDesignation = null;
                 } else {
-                    // "MODE-LINE" -> båda
                     const [mode, line] = display.lineFilter.split('-');
                     display.transportMode = mode;
                     display.lineDesignation = line;
@@ -1458,17 +1655,16 @@ SettingsManager.prototype.cleanConfigForSave = function(config) {
 
 SettingsManager.prototype.save = function() {
     this.collectFormData();
-    
+
     const errors = this.validate();
     if (errors.length > 0) {
         alert('⚠️ Fel i inställningar:\n\n' + errors.join('\n'));
         return;
     }
-    
-    // Rensa och spara
+
     const cleanConfig = this.cleanConfigForSave(this.currentConfig);
     localStorage.setItem('sl_tavla_config', JSON.stringify(cleanConfig));
-    
+
     console.log('✅ Config sparad');
     this.close();
     
@@ -1522,6 +1718,5 @@ SettingsManager.prototype.import = function(e) {
 // HÄR SLUTAR DEL 2
 // ═══════════════════════════════════════════════════════════
 
-// Initiera global instans
 window.settingsManager = new SettingsManager();
 console.log('✅ SettingsManager DEL 2 laddad - Redo!');

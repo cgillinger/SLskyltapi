@@ -230,8 +230,8 @@ class DisplayManager {
     // ═══════════════════════════════════════════════════════════
     // FILTERERA AVGÅNGAR MED A/B-LOGIK
     // ═══════════════════════════════════════════════════════════
-    
-    
+
+
     filterDepartures(allDepartures) {
         let filtered = allDepartures;
         
@@ -257,13 +257,13 @@ class DisplayManager {
                 if (line.lineFilter.endsWith('-*')) {
                     // Alla av ett trafikslag (t.ex. "BUS-*")
                     const mode = line.lineFilter.replace('-*', '');
-                    lineFiltered = lineFiltered.filter(d => 
+                    lineFiltered = lineFiltered.filter(d =>
                         d.line?.transport_mode === mode
                     );
                 } else {
                     // Specifik linje (t.ex. "BUS-30")
                     const [mode, designation] = line.lineFilter.split('-');
-                    lineFiltered = lineFiltered.filter(d => 
+                    lineFiltered = lineFiltered.filter(d =>
                         d.line?.transport_mode === mode &&
                         d.line?.designation === designation
                     );
@@ -310,14 +310,14 @@ class DisplayManager {
         // FALLBACK: Gamla strukturen (bakåtkompatibilitet)
         // STEG 1: Filtrera transportMode
         if (this.config.transportMode) {
-            filtered = filtered.filter(d => 
+            filtered = filtered.filter(d =>
                 d.line?.transport_mode === this.config.transportMode
             );
         }
-        
+
         // STEG 2: Filtrera lineDesignation
         if (this.config.lineDesignation) {
-            filtered = filtered.filter(d => 
+            filtered = filtered.filter(d =>
                 d.line?.designation === this.config.lineDesignation
             );
         }

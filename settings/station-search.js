@@ -1,7 +1,8 @@
 // ═══════════════════════════════════════════════════════════
-// STATION SEARCH - SL Transport API Integration
-// VERSION: 3.0.0 - Med riktnings/destinations-stöd
+// STATION SEARCH - SL Transport API Integration + ResRobot v3.1
+// VERSION: 3.1.0 (senaste ändring: 2026-01-13)
 // Hanterar: Station-cache, autocomplete, linje-hämtning, destinations, cache-info
+// NYT: ResRobot manual search för opt-in komplettering
 // ═══════════════════════════════════════════════════════════
 
 class StationSearch {
@@ -345,6 +346,171 @@ class StationSearch {
     }
 }
 
-// Global instans
+// ═══════════════════════════════════════════════════════════
+// RESROBOT SEARCH - Manual station mapping för opt-in komplettering
+// VERSION: 1.0.0 (senaste ändring: 2026-01-13)
+// Scope: Sök ResRobot-stationer, förhandsvisning, kvot-status
+// ═══════════════════════════════════════════════════════════
+
+class ResRobotSearch {
+    constructor() {
+        this.searchCache = new Map(); // Query → resultat
+        this.previewCache = new Map(); // StopId → departures
+        this.cacheExpiry = 5 * 60 * 1000; // 5 minuter
+        this.apiBase = '/api/resrobot';
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // STATION SEARCH (Manual, 3+ chars)
+    // ═══════════════════════════════════════════════════════════
+
+    async searchStations(query) {
+        // KRAV: Minimum 3 tecken
+        if (!query || query.length < 3) {
+            return { error: 'Minst 3 tecken krävs för sökning', results: [] };
+        }
+
+        // Check cache först
+        const cacheKey = query.toLowerCase().trim();
+        const cached = this.searchCache.get(cacheKey);
+        
+        if (cached && (Date.now() - cached.timestamp) < this.cacheExpiry) {
+            console.log(`📦 ResRobot cache hit: "${query}"`);
+            return { results: cached.data, fromCache: true };
+        }
+
+        // Sök via API
+        try {
+            console.log(`🔍 ResRobot sökning: "${query}"`);
+            const url = `${this.apiBase}/stops?query=${encodeURIComponent(query)}`;
+            const response = await fetch(url);
+
+            if (!response.ok) {
+                if (response.status === 429) {
+                    return { error: 'API-kvot överskriden. Vänta en stund.', results: [] };
+                }
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            // Normaliserad struktur förväntas från backend
+            const results = data.stops || [];
+
+            // Cacha resultat
+            this.searchCache.set(cacheKey, {
+                data: results,
+                timestamp: Date.now()
+            });
+
+            console.log(`✅ ResRobot: ${results.length} stationer hittade`);
+            return { results, fromCache: false };
+
+        } catch (error) {
+            console.error('❌ ResRobot search error:', error);
+            return { error: error.message, results: [] };
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // PREVIEW DEPARTURES (för jämförelse med SL)
+    // ═══════════════════════════════════════════════════════════
+
+    async previewDepartures(stopId, stopName) {
+        if (!stopId) {
+            return { error: 'StopId saknas', departures: [] };
+        }
+
+        // Check cache
+        const cached = this.previewCache.get(stopId);
+        if (cached && (Date.now() - cached.timestamp) < this.cacheExpiry) {
+            console.log(`📦 ResRobot preview cache hit: ${stopName}`);
+            return { departures: cached.data, fromCache: true };
+        }
+
+        // Hämta via API
+        try {
+            console.log(`🔍 ResRobot preview: ${stopName} (${stopId})`);
+            const url = `${this.apiBase}/departures/${stopId}`;
+            const response = await fetch(url);
+
+            if (!response.ok) {
+                if (response.status === 429) {
+                    return { error: 'API-kvot överskriden', departures: [] };
+                }
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            const departures = data.departures || [];
+
+            // Cacha
+            this.previewCache.set(stopId, {
+                data: departures,
+                timestamp: Date.now()
+            });
+
+            console.log(`✅ ResRobot preview: ${departures.length} avgångar`);
+            return { departures, fromCache: false };
+
+        } catch (error) {
+            console.error('❌ ResRobot preview error:', error);
+            return { error: error.message, departures: [] };
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // QUOTA STATUS
+    // ═══════════════════════════════════════════════════════════
+
+    async getQuotaStatus() {
+        try {
+            const response = await fetch(`${this.apiBase}/quota`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            return {
+                used: data.used || 0,
+                limit: data.limit || 25000,
+                remaining: data.remaining || 25000,
+                resetTime: data.resetTime || null,
+                percentage: data.percentage || 0
+            };
+
+        } catch (error) {
+            console.error('❌ ResRobot quota error:', error);
+            return { error: error.message };
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // CACHE MANAGEMENT
+    // ═══════════════════════════════════════════════════════════
+
+    clearCache() {
+        this.searchCache.clear();
+        this.previewCache.clear();
+        console.log('🧹 ResRobot cache cleared');
+    }
+
+    getCacheStats() {
+        return {
+            searchEntries: this.searchCache.size,
+            previewEntries: this.previewCache.size,
+            totalEntries: this.searchCache.size + this.previewCache.size
+        };
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// GLOBAL INSTANCES
+// ═══════════════════════════════════════════════════════════
+
 window.stationSearch = new StationSearch();
-console.log('✅ StationSearch v3.0 initierad (med destinations-stöd)');
+window.resRobotSearch = new ResRobotSearch();
+
+console.log('✅ StationSearch v3.1.0 initierad (med ResRobot v3.1 support)');
+console.log('✅ ResRobotSearch v1.0.0 initierad (manual mapping)');
