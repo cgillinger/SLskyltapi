@@ -3,24 +3,24 @@
   "_EXEMPEL": "Använd 'id' för kod, '_KOMMENTAR' för förklaring",
 
   "_INFO_TAVLOR": "Varje tavla = En station med egna skyltar och avgångstabell",
-
+  
   "layout": {
     "orientation": "horizontal",
     "mode": "fixed",
-
+    
     "_ORIENTERING": {
       "vertical": "Tavlor staplade vertikalt (bra för mobil)",
       "horizontal": "Tavlor bredvid varandra (bra för skärm)"
     },
-
+    
     "_MODE": {
       "fixed": "Tavlor skalas för att få plats på skärmen (default)",
       "floating": "Scrollbar läggs till om tavlor inte får plats"
     },
-
+    
     "_OBS": "mode är bara relevant när orientation = horizontal"
   },
-
+  
   "tavlor": [
     {
       "_TAVLA_1": "Mårtensdal",
@@ -30,24 +30,26 @@
       },
       "displays": [
         {
-          "_SEKTION_1": "Tvärbana",
-          "id": "martensdal-tram",
-          "name": "Tvärbana",
-          "transportMode": "TRAM",
-          "lineDesignation": null,
-          "direction": "B",
+          "_SEKTION_1": "Tvärbana mot Sickla",
+          "id": "martensdal-tram-sickla",
+          "name": "Mot Sickla",
+          "lines": [
+            { "lineFilter": "TRAM-*", "direction": "A" },
+            { "lineFilter": "BUS-30B", "direction": "A" }
+          ],
           "maxScrollingDepartures": 3,
-          "_INFO": "B = Solna Station (A = Sickla)"
+          "_INFO": "A = Sickla (alfabetiskt första destinationen). BUS-30B = ersättningsbuss när Tvärbanan är avstängd."
         },
         {
-          "_SEKTION_2": "Buss 74",
-          "id": "martensdal-bus-74",
-          "name": "Buss 74",
-          "transportMode": "BUS",
-          "lineDesignation": "74",
-          "direction": "A",
+          "_SEKTION_2": "Tvärbana mot Solna",
+          "id": "martensdal-tram-solna",
+          "name": "Mot Solna",
+          "lines": [
+            { "lineFilter": "TRAM-*", "direction": "B" },
+            { "lineFilter": "BUS-30B", "direction": "B" }
+          ],
           "maxScrollingDepartures": 3,
-          "_INFO": "A = Hornsberg (alfabetiskt före Sickla udde)"
+          "_INFO": "B = Solna station (alfabetiskt andra). Ersättningsbuss 30B: B = Stora Essingen."
         }
       ]
     },
@@ -59,24 +61,26 @@
       },
       "displays": [
         {
-          "_SEKTION_1": "Tvärbana",
-          "id": "luma-tram",
-          "name": "Tvärbana",
-          "transportMode": "TRAM",
-          "lineDesignation": null,
-          "direction": "B",
+          "_SEKTION_1": "Tvärbana mot Sickla",
+          "id": "luma-tram-sickla",
+          "name": "Mot Sickla",
+          "lines": [
+            { "lineFilter": "TRAM-*", "direction": "A" },
+            { "lineFilter": "BUS-30B", "direction": "A" }
+          ],
           "maxScrollingDepartures": 3,
-          "_INFO": "B = Solna Station (A = Sickla)"
+          "_INFO": "A = Sickla (alfabetiskt första destinationen). BUS-30B = ersättningsbuss när Tvärbanan är avstängd."
         },
         {
-          "_SEKTION_2": "Buss 74",
-          "id": "luma-bus-74",
-          "name": "Buss 74",
-          "transportMode": "BUS",
-          "lineDesignation": "74",
-          "direction": "A",
+          "_SEKTION_2": "Tvärbana mot Solna",
+          "id": "luma-tram-solna",
+          "name": "Mot Solna",
+          "lines": [
+            { "lineFilter": "TRAM-*", "direction": "B" },
+            { "lineFilter": "BUS-30B", "direction": "B" }
+          ],
           "maxScrollingDepartures": 3,
-          "_INFO": "A = Hornsberg (alfabetiskt före Sickla udde)"
+          "_INFO": "B = Solna station (alfabetiskt andra). Ersättningsbuss 30B: B = Stora Essingen."
         }
       ]
     }
@@ -110,12 +114,12 @@
     "theme": "classic",
     "updateInterval": 30000,
     "scrollSpeed": 8.8,
-
+    
     "_TEMAN": {
       "classic": "Ren LED-känsla (ingen glow)",
       "sci-fi": "Futuristisk display"
     },
-
+    
     "_SCROLL": "scrollSpeed i sekunder (standard: 8.8s = 30% snabbare än 12.6s)"
   },
 
