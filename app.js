@@ -472,18 +472,31 @@ async function fetchDepartures(siteId) {
     try {
         const url = `/api/departures/${siteId}`;
         const response = await fetch(url);
-        
+
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
-        
+
         const data = await response.json();
-        
+
+        // AUTO-UPPDATERING: servern skickar sin app-version i varje svar.
+        // Ändras den (ny deploy) laddas sidan om så kiosk-/mobilbrowsers
+        // hämtar nya klientfiler utan manuell refresh.
+        if (data && data._version) {
+            if (!window.__slAppVersion) {
+                window.__slAppVersion = data._version;
+            } else if (window.__slAppVersion !== data._version) {
+                console.log(`🔄 Ny app-version (${window.__slAppVersion} → ${data._version}) — laddar om sidan`);
+                location.reload();
+                return null;
+            }
+        }
+
         // Uppdatera linje-cache med varje hämtning
         if (data && data.departures) {
             updateLinesCache(siteId, data.departures);
         }
-        
+
         return data;
     } catch (error) {
         console.error('Fel vid hämtning av avgångar:', error);

@@ -6,6 +6,28 @@
 
 import express from 'express';
 import { setTimeout as sleep } from 'timers/promises';
+import { createHash } from 'crypto';
+import { readFileSync } from 'fs';
+
+// ═══════════════════════════════════════════════════════════
+// APP-VERSION
+// Hash av klientfilerna, beräknas vid serverstart. Skickas med i
+// varje /api/departures-svar; klienten laddar om sidan när den
+// ändras (dvs. efter varje deploy/omstart med ny kod eller config).
+// ═══════════════════════════════════════════════════════════
+
+const APP_VERSION = (() => {
+    const files = ['index.html', 'app.js', 'display-renderer.js', 'styles.css', 'config.json'];
+    const hash = createHash('md5');
+    for (const file of files) {
+        try {
+            hash.update(readFileSync(file));
+        } catch {
+            hash.update(file); // fil saknas — låt namnet ingå så hashen ändå blir stabil
+        }
+    }
+    return hash.digest('hex').slice(0, 12);
+})();
 
 // ═══════════════════════════════════════════════════════════
 // KONFIGURATION
@@ -334,6 +356,9 @@ app.use((req, res, next) => {
 
 app.use(express.static('.', {
     setHeaders: (res, path) => {
+        // no-cache = browsern får cacha men MÅSTE revalidera (ETag → 304).
+        // Utan detta heuristik-cachar mobilbrowsers gamla filer på obestämd tid.
+        res.setHeader('Cache-Control', 'no-cache');
         if (path.endsWith('.js')) {
             res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
         } else if (path.endsWith('.html')) {
@@ -390,6 +415,7 @@ app.get('/api/departures/:siteId', async (req, res) => {
     // Returnera data med metadata
     res.json({
         ...cached.data,
+        _version: APP_VERSION,
         _cache: {
             timestamp: cached.timestamp,
             age: Math.round((Date.now() - cached.timestamp) / 1000)
@@ -403,6 +429,7 @@ app.get('/api/departures/:siteId', async (req, res) => {
  */
 app.get('/api/status', (req, res) => {
     res.json({
+        version: APP_VERSION,
         config: {
             port: CONFIG.port,
             cacheTTL: CONFIG.cacheTTL / 1000,
@@ -447,6 +474,7 @@ app.listen(CONFIG.port, () => {
     console.log(`📡 Port: ${CONFIG.port}`);
     console.log(`💾 Cache TTL: ${CONFIG.cacheTTL / 1000}s`);
     console.log(`🔭 Forecast-fönster: ${CONFIG.forecastMinutes} min`);
+    console.log(`🏷️  App-version: ${APP_VERSION}`);
     console.log(`⏱️  Polling intervaller:`);
     console.log(`   - Nästa avgång ≤ 10 min: ${CONFIG.polling.immediate / 1000}s`);
     console.log(`   - Nästa avgång > 10 min: ${CONFIG.polling.normal / 1000}s`);
