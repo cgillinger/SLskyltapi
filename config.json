@@ -35,18 +35,22 @@
             {
               "lineFilter": "BUS-30B",
               "direction": "A"
+            },
+            {
+              "lineFilter": "BUS-74",
+              "direction": "B"
             }
           ],
           "maxScrollingDepartures": 3,
-          "_INFO": "A = Sickla (alfabetiskt första destinationen). BUS-30B = ersättningsbuss när Tvärbanan är avstängd.",
+          "_INFO": "Tvärbana mot Sickla (A) + ersättningsbuss 30B (A) + buss 74 mot Sickla udde (B — Hornsberg är alfabetiskt först).",
           "transportMode": "TRAM",
           "lineDesignation": null,
           "direction": "A"
         },
         {
-          "_SEKTION_2": "Tvärbana mot Solna",
+          "_SEKTION_2": "Mot Solna/Hornsberg",
           "id": "martensdal-tram-solna",
-          "name": "Mot Solna",
+          "name": "Mot Solna/Hornsberg",
           "lines": [
             {
               "lineFilter": "TRAM-*",
@@ -55,12 +59,16 @@
             {
               "lineFilter": "BUS-30B",
               "direction": "B"
+            },
+            {
+              "lineFilter": "BUS-74",
+              "direction": "A"
             }
           ],
           "maxScrollingDepartures": 3,
-          "_INFO": "B = Solna station (alfabetiskt andra). Ersättningsbuss 30B: B = Stora Essingen.",
-          "transportMode": "TRAM",
-          "lineDesignation": null,
+          "_INFO": "Tvärbana mot Solna (B) + ersättningsbuss 30B mot Stora Essingen (B) + buss 74 mot Hornsberg (A).",
+          "transportMode": "BUS",
+          "lineDesignation": "74",
           "direction": "B"
         }
       ]
@@ -84,18 +92,22 @@
             {
               "lineFilter": "BUS-30B",
               "direction": "A"
+            },
+            {
+              "lineFilter": "BUS-74",
+              "direction": "B"
             }
           ],
           "maxScrollingDepartures": 3,
-          "_INFO": "A = Sickla (alfabetiskt första destinationen). BUS-30B = ersättningsbuss när Tvärbanan är avstängd.",
+          "_INFO": "Tvärbana mot Sickla (A) + ersättningsbuss 30B (A) + buss 74 mot Sickla udde (B — Hornsberg är alfabetiskt först).",
           "transportMode": "TRAM",
           "lineDesignation": null,
           "direction": "A"
         },
         {
-          "_SEKTION_2": "Tvärbana mot Solna",
+          "_SEKTION_2": "Mot Solna/Hornsberg",
           "id": "luma-tram-solna",
-          "name": "Mot Solna",
+          "name": "Mot Solna/Hornsberg",
           "lines": [
             {
               "lineFilter": "TRAM-*",
@@ -104,12 +116,16 @@
             {
               "lineFilter": "BUS-30B",
               "direction": "B"
+            },
+            {
+              "lineFilter": "BUS-74",
+              "direction": "A"
             }
           ],
           "maxScrollingDepartures": 3,
-          "_INFO": "B = Solna station (alfabetiskt andra). Ersättningsbuss 30B: B = Stora Essingen.",
-          "transportMode": "TRAM",
-          "lineDesignation": null,
+          "_INFO": "Tvärbana mot Solna (B) + ersättningsbuss 30B mot Stora Essingen (B) + buss 74 mot Hornsberg (A).",
+          "transportMode": "BUS",
+          "lineDesignation": "74",
           "direction": "B"
         }
       ]
